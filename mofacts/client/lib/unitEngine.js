@@ -595,6 +595,15 @@ function modelUnitEngine() {
           return calculateCardProbabilities();
         },
 
+        getCardProbsUnmapped: function() {
+            // 
+            return cardProbabilities
+        },
+
+        setCardProbsRemapped: function() {
+
+        },
+
         unitType: "model",
 
         unitMode: (function(){
@@ -653,6 +662,12 @@ function modelUnitEngine() {
             var cardIndex = prob.cardIndex;
             var card = cards[cardIndex];
             var whichStim = prob.stimIndex;
+
+            if (whichStim == -1) {
+                console.log("WHICH STIM -1");
+                console.log(prob);
+            }
+
             var stim = card.stims[whichStim];
 
             // Store calculated probability for selected stim/cluster

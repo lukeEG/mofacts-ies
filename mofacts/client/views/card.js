@@ -2106,6 +2106,70 @@ function allowUserInput(textFocus) {
 ////////////////////////////////////////////////////////////////////////////
 // BEGIN Resume Logic
 
+getTdfFromKeyFileName = function(keyFileName) {
+  var fileName = keyFileName.replace(/_([^_]*)$/, '.' + '$1');
+
+  return Tdfs.findOne({fileName: fileName});
+}
+
+// Return concatenated list of user times logs with current stimulus
+getUserTimesLogsAndEngines = function() {
+  var userLog = UserTimesLog.findOne({ _id: Meteor.userId() });
+  var keys = Object.keys(userLog);
+  var engines = {};
+  var userLogsWithCurrentStim = [];
+
+  keys.forEach(function(key) {
+    // Skip ID object
+    if (key.includes("xml")) {
+      var currUnit = null;
+
+      if (userLog[key][0].stimulusfile == Session.get("currentStimName")) {
+        userLogsWithCurrentStim.push(userLog[key].map(function(entry) {
+          entry.key = key;
+          return entry;
+        }));
+
+        var lastUnit = null;
+
+        for (var i = 0; i < userLog[key].length; i++) {
+          if (!!userLog[key][i].currentUnit || userLog[key][i].currentUnit == 0) {
+            currUnit = userLog[key][i].currentUnit;
+
+            if (currUnit != lastUnit) {
+              lastUnit = currUnit;
+
+              var keyFile = key.replace(/_([^_]*)$/, '.' + '$1');
+              
+              if (!engines[key]) {
+                engines[key] = {};
+              }
+
+              if (unitHasOption(currUnit, "assessmentsession", keyFile)) {
+                engines[key][currUnit] = createScheduleUnit();
+              } else if (unitHasOption(currUnit, "learningsession", keyFile)) {
+                engines[key][currUnit] = createModelUnit();
+              } else {
+                engines[key][currUnit] = createEmptyUnit();
+              }
+            }
+          }
+        }
+      }
+    }
+  });
+
+  var userTimesLogs = [].concat(...userLogsWithCurrentStim);
+  userTimesLogs.sort(function(a, b) {
+    return a.serverSideTimeStamp < b.serverSideTimeStamp;
+  });
+
+  return {
+    logs: userTimesLogs,
+    engines: engines
+  };
+}
+
 //Helper for getting the relevant user times log
 getCurrentUserTimesLog = function(expKey) {
     var userLog = UserTimesLog.findOne({ _id: Meteor.userId() });
@@ -2363,6 +2427,24 @@ function resumeFromUserTimesLog() {
     });
 }
 
+// Helper to determine if a unit specified by index has the given field
+unitHasOption = function(unitIdx, optionName, fileName) {
+  var file = {};
+
+  if (fileName == undefined) {
+    file = getCurrentTdfFile();
+  } else {
+    file = Tdfs.findOne({fileName: fileName});
+  }
+
+  var unitSection = _.chain(file.tdfs.tutor)
+    .prop("unit").prop(unitIdx)
+    .prop(optionName).first().value();
+    console.log("UNIT CHECK", unitIdx, optionName, !!unitSection);
+    
+  return !!unitSection;
+};
+
 //We process the user times log, assuming resumeFromUserTimesLog has properly
 //set up the TDF/Stim session variables
 processUserTimesLog = function(expKey) {
@@ -2389,31 +2471,42 @@ processUserTimesLog = function(expKey) {
     //it will miss instructions for the very first unit.
     var needFirstUnitInstructions = tutor.unit && tutor.unit.length;
 
-    //Helper to determine if a unit specified by index has the given field
-    var unitHasOption = function(unitIdx, optionName) {
-        var unitSection = _.chain(file.tdfs.tutor)
-            .prop("unit").prop(unitIdx)
-            .prop(optionName).first().value();
-        console.log("UNIT CHECK", unitIdx, optionName, !!unitSection);
-        return !!unitSection;
-    };
+
 
     //It's possible that they clicked Continue on a final unit, so we need to
     //know to act as if we're done
     var moduleCompleted = false;
 
+    // Reset user progress
+    var resetUserProgress = function() {
+      var userProgressToRestore = getUserProgress();
+      userProgressToRestore.schedule = null;
+
+      initUserProgress(userProgressToRestore);
+    }
+
     //Reset current engine
-    var resetEngine = function(currUnit) {
+    var resetEngine = function(currUnit, currEngine) {
         if (unitHasOption(currUnit, "assessmentsession")) {
-            engine = createScheduleUnit();
+            currEngine = createScheduleUnit();
+            engine = currEngine;
+            resetUserProgress();
             Session.set("sessionType","assessmentsession");
         }
         else if (unitHasOption(currUnit, "learningsession")) {
-            engine = createModelUnit();
+            currEngine = createModelUnit();
+            engine = currEngine;
+            resetUserProgress();
             Session.set("sessionType","learningsession");
+
+            if (cardProbs != undefined && cardProbs.length && cardProbs.length > 0) {
+              engine.initProbs(cardProbs);
+            }
         }
         else {
-            engine = createEmptyUnit();
+            currEngine = createEmptyUnit();
+            engine = currEngine;
+            resetUserProgress();
             Session.set("sessionType","empty");
         }
     };
@@ -2422,11 +2515,24 @@ processUserTimesLog = function(expKey) {
     //earliest time for our unit start
     var startTimeMinUnit = -1;
 
+    // Returns an array of objects, each containing an array of userTimesLogs and their corresponding engine
+    // Each action has a 'key' value that is the key value for its engine
+    var utLogEngines = getUserTimesLogsAndEngines();
+    var engines = utLogEngines.engines;
+    
+    // We'll track the previous engine so we can pull its probabilities, map to raw cluster index,
+    // and then remap it back to the current engine (to maintain card/prob state across engines)
+    var previousEngine = {};
+
+    var cardProbs = {};
+
+    var trackedCurrentUnit = null;
+
     //At this point, our state is set as if they just started this learning
     //session for the first time. We need to loop thru the user times log
     //entries and update that state
 
-    _.each(getCurrentUserTimesLog(expKey), function(entry, index, currentList) {
+    _.each(utLogEngines.logs, function(entry, index, currentList) {
         // IMPORTANT: this won't really work since we're in a tight loop. If we really
         // want to get this to work, we would need asynch loop processing (see
         // http://stackoverflow.com/questions/9772400/javascript-async-loop-processing
@@ -2438,6 +2544,12 @@ processUserTimesLog = function(expKey) {
         // progress = _.intval(progress * 100);
         // $('#resumeMsg').text(progress + "% Complete");
         // $('.progress-bar').css('width', progress+'%').attr('aria-valuenow', progress);
+
+        // Since some answers don't have preceding questions (why?), track current unit and use
+        // it where the preceding question doesn't exist
+        if (entry.currentUnit != undefined) {
+          trackedCurrentUnit = entry.currentUnit;
+        }
 
         if (!entry.action) {
             console.log("Ignoring user times entry with no action");
@@ -2470,7 +2582,28 @@ processUserTimesLog = function(expKey) {
             }
         }
 
+        else if (action === "cluster-mapping") {
+          Session.set("clusterMapping", entry.clusterMapping);
+
+          if (!!cardProbs && cardProbs.probs && cardProbs.probs.length) {
+            var remappedCards = Array(cardProbs.cards.length).fill({});
+
+            for (var i = 0; i < cardProbs.probs.length; i++) {
+              // Remap card probabilities values to correspond with cluster raw index
+              // We do this each time there's a new cluster mapping so there is a relationship
+              // between the probabilities based on the previous card order and the new card order
+              var clusterIndex = getOriginalCurrentClusterIndex(cardProbs.probs[i].cardIndex);
+              cardProbs.probs[i].cardIndex = clusterIndex;
+
+              remappedCards[clusterIndex] = cardProbs.cards[cardProbs.probs[i].cardIndex];
+            }
+
+            cardProbs.cards = remappedCards;
+          }
+        }
+        
         else if (action === "unit-end") {
+            file = getTdfFromKeyFileName(entry.key);
             //Logged completion of unit - if this is the final unit we also
             //know that the TDF is completed
             var finishedUnit = _.intval(entry.currentUnit, -1);
@@ -2507,6 +2640,7 @@ processUserTimesLog = function(expKey) {
         }
 
         else if (action === "schedule") {
+            file = getTdfFromKeyFileName(entry.key);
             //Read in the previously created schedule
             lastQuestionEntry = null; //Kills the last question
             needFirstUnitInstructions = false;
@@ -2582,7 +2716,7 @@ processUserTimesLog = function(expKey) {
             // log entry back to it). The entry should include the original
             // selection value to pass in, but if it doesn't we default to
             // cardIndex (which should work for all units except the model)
-            engine.cardSelected(entry.selectVal || cardIndex, entry);
+            engines[entry.key][entry.currentUnit].cardSelected(entry.selectVal || cardIndex, entry);
         }
 
         else if (action === "answer" || action === "[timeout]") {
@@ -2626,7 +2760,9 @@ processUserTimesLog = function(expKey) {
             writeCurrentToScrollList(entry.answer, action === "[timeout]", simCorrect, 0);
 
             //Notify unit engine about card answer
-            engine.cardAnswered(wasCorrect, entry);
+            // Since answers don't track current unit, we get the unit from previous log entry which *should* be a question
+            // In some situations it's not, so we also use the previously tracked current unit in case there is no preceding question
+            engines[entry.key][utLogEngines.logs[index - 1].currentUnit || trackedCurrentUnit].cardAnswered(wasCorrect, entry);
 
             //We know the last question no longer applies
             lastQuestionEntry = null;
