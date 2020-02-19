@@ -2418,6 +2418,10 @@ function resumeFromUserTimesLog() {
     //Go ahead and save the cluster mapping we found/created
     Session.set("clusterMapping", clusterMapping);
 
+    // We'll need this cached so we can pull it out after going through the map/remap process
+    // when we're carrying over probabilities
+    Session.set("cachedMapping", clusterMapping);
+
     //Notice that no matter what, we log something about condition data
     //ALSO NOTICE that we'll be calling processUserTimesLog after the server
     //returns and we know we've logged what happened
@@ -2477,26 +2481,18 @@ processUserTimesLog = function(expKey) {
     //know to act as if we're done
     var moduleCompleted = false;
 
-    // Reset user progress
-    var resetUserProgress = function() {
-      var userProgressToRestore = getUserProgress();
-      userProgressToRestore.schedule = null;
-
-      initUserProgress(userProgressToRestore);
-    }
-
     //Reset current engine
     var resetEngine = function(currUnit, currEngine) {
         if (unitHasOption(currUnit, "assessmentsession")) {
             currEngine = createScheduleUnit();
             engine = currEngine;
-            resetUserProgress();
+
             Session.set("sessionType","assessmentsession");
         }
         else if (unitHasOption(currUnit, "learningsession")) {
             currEngine = createModelUnit();
             engine = currEngine;
-            resetUserProgress();
+
             Session.set("sessionType","learningsession");
 
             if (cardProbs != undefined && cardProbs.length && cardProbs.length > 0) {
@@ -2506,7 +2502,7 @@ processUserTimesLog = function(expKey) {
         else {
             currEngine = createEmptyUnit();
             engine = currEngine;
-            resetUserProgress();
+
             Session.set("sessionType","empty");
         }
     };
@@ -2523,10 +2519,9 @@ processUserTimesLog = function(expKey) {
     // We'll track the previous engine so we can pull its probabilities, map to raw cluster index,
     // and then remap it back to the current engine (to maintain card/prob state across engines)
     var previousEngine = {};
+    var trackedCurrentUnit = null;
 
     var cardProbs = {};
-
-    var trackedCurrentUnit = null;
 
     //At this point, our state is set as if they just started this learning
     //session for the first time. We need to loop thru the user times log
@@ -2545,12 +2540,6 @@ processUserTimesLog = function(expKey) {
         // $('#resumeMsg').text(progress + "% Complete");
         // $('.progress-bar').css('width', progress+'%').attr('aria-valuenow', progress);
 
-        // Since some answers don't have preceding questions (why?), track current unit and use
-        // it where the preceding question doesn't exist
-        if (entry.currentUnit != undefined) {
-          trackedCurrentUnit = entry.currentUnit;
-        }
-
         if (!entry.action) {
             console.log("Ignoring user times entry with no action");
             return;
@@ -2564,45 +2553,29 @@ processUserTimesLog = function(expKey) {
         var recordTimestamp = true;
 
         if (action === "instructions") {
+            var currEngine = engines[entry.key][entry.currentUnit];
+            previousEngine = currEngine;
             //They've been shown instructions for this unit
             needFirstUnitInstructions = false;
             var instructUnit = entry.currentUnit;
             if (!!instructUnit || instructUnit === 0) {
-                Session.set("currentUnitNumber", instructUnit);
-                Session.set("questionIndex", 0);
-                Session.set("clusterIndex", undefined);
-                Session.set("currentQuestion", undefined);
-                Session.set("currentQuestionPart2",undefined);
-                Session.set("currentAnswer", undefined);
-                Session.set("testType", undefined);
+                currEngine.localSessionSet("currentUnitNumber", instructUnit);
+                currEngine.localSessionSet("questionIndex", 0);
+                currEngine.localSessionSet("clusterIndex", undefined);
+                currEngine.localSessionSet("currentQuestion", undefined);
+                currEngine.localSessionSet("currentQuestionPart2",undefined);
+                currEngine.localSessionSet("currentAnswer", undefined);
+                currEngine.localSessionSet("testType", undefined);
 
                 clearScrollList();
 
-                resetEngine(instructUnit);
+                resetEngine(instructUnit, currEngine);
             }
-        }
-
-        else if (action === "cluster-mapping") {
-          Session.set("clusterMapping", entry.clusterMapping);
-
-          if (!!cardProbs && cardProbs.probs && cardProbs.probs.length) {
-            var remappedCards = Array(cardProbs.cards.length).fill({});
-
-            for (var i = 0; i < cardProbs.probs.length; i++) {
-              // Remap card probabilities values to correspond with cluster raw index
-              // We do this each time there's a new cluster mapping so there is a relationship
-              // between the probabilities based on the previous card order and the new card order
-              var clusterIndex = getOriginalCurrentClusterIndex(cardProbs.probs[i].cardIndex);
-              cardProbs.probs[i].cardIndex = clusterIndex;
-
-              remappedCards[clusterIndex] = cardProbs.cards[cardProbs.probs[i].cardIndex];
-            }
-
-            cardProbs.cards = remappedCards;
-          }
         }
         
         else if (action === "unit-end") {
+            var currEngine = engines[entry.key][entry.currentUnit];
+            previousEngine = currEngine;
             file = getTdfFromKeyFileName(entry.key);
             //Logged completion of unit - if this is the final unit we also
             //know that the TDF is completed
@@ -2613,12 +2586,12 @@ processUserTimesLog = function(expKey) {
                 needFirstUnitInstructions = false;
                 lastQuestionEntry = null;
 
-                Session.set("questionIndex", 0);
-                Session.set("clusterIndex", undefined);
-                Session.set("currentQuestion", undefined);
-                Session.set("currentQuestionPart2",undefined);
-                Session.set("currentAnswer", undefined);
-                Session.set("testType", undefined);
+                currEngine.localSessionSet("questionIndex", 0);
+                currEngine.localSessionSet("clusterIndex", undefined);
+                currEngine.localSessionSet("currentQuestion", undefined);
+                currEngine.localSessionSet("currentQuestionPart2",undefined);
+                currEngine.localSessionSet("currentAnswer", undefined);
+                currEngine.localSessionSet("testType", undefined);
 
                 clearScrollList();
 
@@ -2629,8 +2602,8 @@ processUserTimesLog = function(expKey) {
                 else {
                     //Moving to next unit
                     checkUnit += 1;
-                    Session.set("currentUnitNumber", checkUnit);
-                    resetEngine(checkUnit);
+                    currEngine.localSessionSet("currentUnitNumber", checkUnit);
+                    resetEngine(checkUnit, currEngine);
                 }
             }
         }
@@ -2685,41 +2658,46 @@ processUserTimesLog = function(expKey) {
         }
 
         else if (action === "question") {
-            //Read in previously asked question
-            lastQuestionEntry = entry; //Always save the last question
-            needFirstUnitInstructions = false;
+          previousEngine = currEngine;
+          var currEngine = engines[entry.key][entry.currentUnit]
+          //Read in previously asked question
+          lastQuestionEntry = entry; //Always save the last question
+          needFirstUnitInstructions = false;
 
-            if (!entry.selType) {
-                console.log("Ignoring user times entry question with no selType", entry);
-                return;
-            }
+          if (!entry.selType) {
+              console.log("Ignoring user times entry question with no selType", entry);
+              return;
+          }
 
-            //Restore the session variables we save with each question
-            //REMEMBER - the logged card had its mapped index logged as
-            //clusterIndex, but we use the UN-mapped index right up until we
-            //send the log or access a stimulus cluster. Luckily the unmapped
-            //index should have been logged as shufIndex. Note that if there
-            //isn't a shufIndex, we just use the clusterIndex
-            var cardIndex = entry.shufIndex || entry.clusterIndex;
+          //Restore the session variables we save with each question
+          //REMEMBER - the logged card had its mapped index logged as
+          //clusterIndex, but we use the UN-mapped index right up until we
+          //send the log or access a stimulus cluster. Luckily the unmapped
+          //index should have been logged as shufIndex. Note that if there
+          //isn't a shufIndex, we just use the clusterIndex
+          var cardIndex = entry.shufIndex || entry.clusterIndex;
+          
+          currEngine.localSessionSet("clusterIndex",         cardIndex);
+          currEngine.localSessionSet("questionIndex",        entry.questionIndex);
+          currEngine.localSessionSet("currentUnitNumber",    entry.currentUnit);
+          currEngine.localSessionSet("currentQuestion",      entry.selectedQuestion);
+          currEngine.localSessionSet("currentQuestionPart2", entry.selectedQuestionPart2);
+          currEngine.localSessionSet("currentAnswer",        entry.selectedAnswer);
+          currEngine.localSessionSet("showOverlearningText", entry.showOverlearningText);
+          currEngine.localSessionSet("testType",             entry.testType);
 
-            Session.set("clusterIndex",         cardIndex);
-            Session.set("questionIndex",        entry.questionIndex);
-            Session.set("currentUnitNumber",    entry.currentUnit);
-            Session.set("currentQuestion",      entry.selectedQuestion);
-            Session.set("currentQuestionPart2", entry.selectedQuestionPart2);
-            Session.set("currentAnswer",        entry.selectedAnswer);
-            Session.set("showOverlearningText", entry.showOverlearningText);
-            Session.set("testType",             entry.testType);
-
-            // Notify the current engine about the card selection (and note that
-            // the engine knows that this is a resume because we're passing the
-            // log entry back to it). The entry should include the original
-            // selection value to pass in, but if it doesn't we default to
-            // cardIndex (which should work for all units except the model)
-            engines[entry.key][entry.currentUnit].cardSelected(entry.selectVal || cardIndex, entry);
+          // Notify the current engine about the card selection (and note that
+          // the engine knows that this is a resume because we're passing the
+          // log entry back to it). The entry should include the original
+          // selection value to pass in, but if it doesn't we default to
+          // cardIndex (which should work for all units except the model)
+          currEngine.cardSelected(entry.selectVal || cardIndex, entry);
         }
 
         else if (action === "answer" || action === "[timeout]") {
+            previousEngine = currEngine;
+            var currEngine = engines[entry.key][utLogEngines.logs[index - 1].currentUnit || lastQuestionEntry.currentUnit];
+          
             //Read in the previously recorded answer (even if it was a timeout)
             needCurrentInstruction = false; //Answer means they got past the instructions
             needFirstUnitInstructions = false;
@@ -2747,8 +2725,8 @@ processUserTimesLog = function(expKey) {
 
             //The session variables should be set up correctly from the question
             recordProgress(
-                Session.get("currentQuestion"),
-                Session.get("currentAnswer"),
+                currEngine.localSessionGet("currentQuestion"),
+                currEngine.localSessionGet("currentAnswer"),
                 entry.answer,
                 wasCorrect
             );
@@ -2762,7 +2740,7 @@ processUserTimesLog = function(expKey) {
             //Notify unit engine about card answer
             // Since answers don't track current unit, we get the unit from previous log entry which *should* be a question
             // In some situations it's not, so we also use the previously tracked current unit in case there is no preceding question
-            engines[entry.key][utLogEngines.logs[index - 1].currentUnit || trackedCurrentUnit].cardAnswered(wasCorrect, entry);
+            currEngine.cardAnswered(wasCorrect, entry);
 
             //We know the last question no longer applies
             lastQuestionEntry = null;
@@ -2782,6 +2760,15 @@ processUserTimesLog = function(expKey) {
             }
         }
     });
+
+    Session.set("clusterIndex",             engine.localSessionGet("clusterIndex"));
+    Session.set("questionIndex",            engine.localSessionGet("questionIndex"));
+    Session.set("currentUnitNumber",        engine.localSessionGet("currentUnitNumber"));
+    Session.set("currentQuestion",          engine.localSessionGet("currentQuestion"));
+    Session.set("currentQuestionPart2",     engine.localSessionGet("currentQuestionPart2"));
+    Session.set("currentAnswer",            engine.localSessionGet("currentAnswer"));
+    Session.set("showOverlearningText",     engine.localSessionGet("showOverlearningText"));
+    Session.set("testType",                 engine.localSessionGet("testType"));
 
     //If we make it here, then we know we won't need a resume until something
     //else happens

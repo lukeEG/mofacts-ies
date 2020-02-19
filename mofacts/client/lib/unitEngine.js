@@ -228,6 +228,20 @@ function modelUnitEngine() {
         );
     }
 
+    localSession = {};
+    function initLocalSession(overrideData) {
+        var initVals = {
+            clusterIndex: 0,
+            questionIndex: 0,
+            currentUnitNumber: 0,
+            currentQuestion: "",
+            currentQuestionPart2: "",
+            currentAnswer: "",
+            showOverlearningText: false,
+            testType: ""
+        }
+    }
+
     //Initialize card probabilities, with optional initial data
     cardProbabilities = [];
     function initCardProbs(overrideData) {
@@ -602,6 +616,14 @@ function modelUnitEngine() {
 
         setCardProbsRemapped: function() {
 
+        },
+
+        localSessionSet(property, value) {
+            localSession[property] = value;
+        },
+
+        localSessionGet(property) {
+            return localSession[property];
         },
 
         unitType: "model",
