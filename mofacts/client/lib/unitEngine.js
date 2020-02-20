@@ -849,9 +849,9 @@ function modelUnitEngine() {
         },
 
         createQuestionLogEntry: function() {
-            var idx = getCurrentClusterIndex();
+            var idx = this.localSessionGet("clusterIndex");
             var card = cardProbabilities.cards[idx];
-            var cluster = fastGetStimCluster(getCurrentClusterIndex());
+            var cluster = fastGetStimCluster(this.localSessionGet("clusterIndex"));
             var responseText = stripSpacesAndLowerCase(Answers.getDisplayAnswerText(cluster.response[currentCardInfo.whichStim]));
             var responseData = {
               responseText: responseText,
@@ -868,7 +868,7 @@ function modelUnitEngine() {
         cardAnswered: function(wasCorrect, resumeData) {
             // Get info we need for updates and logic below
             var cards = cardProbabilities.cards;
-            var cluster = fastGetStimCluster(getCurrentClusterIndex());
+            var cluster = fastGetStimCluster(this.localSessionGet("clusterIndex"));
             var card = _.prop(cards, cluster.shufIndex);
 
             // Before our study trial check, capture if this is NOT a resume
