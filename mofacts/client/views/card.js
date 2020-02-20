@@ -2613,6 +2613,7 @@ processUserTimesLog = function(expKey) {
         }
 
         else if (action === "schedule") {
+          var currEngine = engines[entry.key][entry.unitindex];
             file = getTdfFromKeyFileName(entry.key);
             //Read in the previously created schedule
             lastQuestionEntry = null; //Kills the last question
@@ -2649,7 +2650,7 @@ processUserTimesLog = function(expKey) {
             currEngine.localSessionSet("questionIndex", 0);
 
             //Blank out things that should restart with a schedule
-            currEngine.localSessionSett("clusterIndex", undefined);
+            currEngine.localSessionSet("clusterIndex", undefined);
             currEngine.localSessionSet("currentQuestion", undefined);
             currEngine.localSessionSet("currentQuestionPart2",undefined);
             currEngine.localSessionSet("currentAnswer", undefined);
