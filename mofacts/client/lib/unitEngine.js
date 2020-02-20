@@ -700,33 +700,33 @@ function modelUnitEngine() {
             // Save the card selection
             // Note that we always take the first stimulus and it's always a drill
             setCurrentClusterIndex(cardIndex);
-            Session.set("currentQuestion", fastGetStimQuestion(cardIndex, whichStim));
-            var currentQuestion = Session.get("currentQuestion");
+            this.localSessionSet("currentQuestion", fastGetStimQuestion(cardIndex, whichStim));
+            var currentQuestion = this.localSessionGet("currentQuestion");
             //If we have a dual prompt question populate the spare data field
             if(currentQuestion.indexOf("|") != -1){
 
               var prompts = currentQuestion.split("|");
-              Session.set("currentQuestion",prompts[0]);
-              Session.set("currentQuestionPart2",prompts[1]);
+              this.localSessionSet("currentQuestion",prompts[0]);
+              this.localSessionSet("currentQuestionPart2",prompts[1]);
           //    console.log("two part question detected: " + prompts[0] + ",,," + prompts[1]);
             }else{
           //    console.log("Q: " +prompts[0]);
-              Session.set("currentQuestionPart2",undefined);
+              this.localSessionSet("currentQuestionPart2",undefined);
             }
 
-            Session.set("currentAnswer", fastGetStimAnswer(cardIndex, whichStim));
+            this.localSessionSet("currentAnswer", fastGetStimAnswer(cardIndex, whichStim));
             if(getCurrentDeliveryParams().studyFirst){
               if(card.studyTrialCount == 0){
                 console.log("!!! STUDY FOR FIRST TRIAL");
-                Session.set("testType",'s');
+                this.localSessionSet("testType",'s');
               }else{
-                Session.set("testType", "d");
+                this.localSessionSet("testType", "d");
               }
             }else{
-              Session.set("testType", "d");
+              this.localSessionSet("testType", "d");
             }
-            Session.set("questionIndex", 1);  //questionIndex doesn't have any meaning for a model
-            Session.set("showOverlearningText", showOverlearningText);
+            this.localSessionSet("questionIndex", 1);  //questionIndex doesn't have any meaning for a model
+            this.localSessionSet("showOverlearningText", showOverlearningText);
 
             // About to show a card - record any times necessary
             card.lastShownTimestamp = Date.now();
@@ -1038,6 +1038,20 @@ function scheduleUnitEngine() {
         return schedule;
     }
 
+    localSession = {};
+    function initLocalSession(overrideData) {
+        var initVals = {
+            clusterIndex: 0,
+            questionIndex: 0,
+            currentUnitNumber: 0,
+            currentQuestion: "",
+            currentQuestionPart2: "",
+            currentAnswer: "",
+            showOverlearningText: false,
+            testType: ""
+        }
+    }
+
     return {
         unitType: "schedule",
 
@@ -1045,32 +1059,40 @@ function scheduleUnitEngine() {
             //Nothing currently
         },
 
+        localSessionSet(property, value) {
+            localSession[property] = value;
+        },
+
+        localSessionGet(property) {
+            return localSession[property];
+        },
+
         selectNextCard: function() {
             // currently unused: var unit = getCurrentUnitNumber();
-            var questionIndex = Session.get("questionIndex");
+            var questionIndex = this.localSessionGet("questionIndex");
             var questInfo = getSchedule().q[questionIndex];
             var whichStim = questInfo.whichStim;
 
             //Set current Q/A info, type of test (drill, test, study), and then
             //increment the session's question index number
             setCurrentClusterIndex(questInfo.clusterIndex);
-            Session.set("currentQuestion", getCurrentStimQuestion(whichStim));
-            var currentQuestion = Session.get("currentQuestion");
+            this.localSessionSet("currentQuestion", getCurrentStimQuestion(whichStim));
+            var currentQuestion = this.localSessionGet("currentQuestion");
             //If we have a dual prompt question populate the spare data field
             if(currentQuestion.indexOf("|") != -1){
 
               var prompts = currentQuestion.split("|");
-              Session.set("currentQuestion",prompts[0]);
-              Session.set("currentQuestionPart2",prompts[1]);
+              this.localSessionSet("currentQuestion",prompts[0]);
+              this.localSessionSet("currentQuestionPart2",prompts[1]);
               console.log("two part question detected: " + prompts[0] + ",,," + prompts[1]);
             }else{
               console.log("one part question detected");
-              Session.set("currentQuestionPart2",undefined);
+              this.localSessionSet("currentQuestionPart2",undefined);
             }
-            Session.set("currentAnswer", getCurrentStimAnswer(whichStim));
-            Session.set("testType", questInfo.testType);
-            Session.set("questionIndex", questionIndex + 1);
-            Session.set("showOverlearningText", false);  //No overlearning in a schedule
+            this.localSessionSet("currentAnswer", getCurrentStimAnswer(whichStim));
+            this.localSessionSet("testType", questInfo.testType);
+            this.localSessionSet("questionIndex", questionIndex + 1);
+            this.localSessionSet("showOverlearningText", false);  //No overlearning in a schedule
 
             console.log("SCHEDULE UNIT card selection => ",
                 "cluster-idx-unmapped:", questInfo.clusterIndex,
@@ -1084,7 +1106,7 @@ function scheduleUnitEngine() {
         findCurrentCardInfo: function() {
             //selectNextCard increments questionIndex after setting all card
             //info, so we need to use -1 for this info
-            return getSchedule().q[Session.get("questionIndex") - 1];
+            return getSchedule().q[this.localSessionGet("questionIndex") - 1];
         },
 
         cardSelected: function(selectVal, resumeData) {
@@ -1111,8 +1133,8 @@ function scheduleUnitEngine() {
         },
 
         unitFinished: function() {
-            var questionIndex = Session.get("questionIndex");
-            var unit = getCurrentUnitNumber();
+            var questionIndex = this.localSessionGet("questionIndex");
+            var unit = this.localSessionGet("currentUnitNumber");
             var schedule = null;
             if (unit < getCurrentTdfFile().tdfs.tutor.unit.length) {
                 schedule = getSchedule();

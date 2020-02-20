@@ -2487,13 +2487,13 @@ processUserTimesLog = function(expKey) {
             currEngine = createScheduleUnit();
             engine = currEngine;
 
-            Session.set("sessionType","assessmentsession");
+            currEngine.localSessionSet("sessionType","assessmentsession");
         }
         else if (unitHasOption(currUnit, "learningsession")) {
             currEngine = createModelUnit();
             engine = currEngine;
 
-            Session.set("sessionType","learningsession");
+            currEngine.localSessionSet("sessionType","learningsession");
 
             if (cardProbs != undefined && cardProbs.length && cardProbs.length > 0) {
               engine.initProbs(cardProbs);
@@ -2503,7 +2503,7 @@ processUserTimesLog = function(expKey) {
             currEngine = createEmptyUnit();
             engine = currEngine;
 
-            Session.set("sessionType","empty");
+            currEngine.localSessionSet("sessionType","empty");
         }
     };
 
@@ -2645,15 +2645,15 @@ processUserTimesLog = function(expKey) {
             //Update what we know about the session
             //Note that the schedule unit engine will see and use this
             getUserProgress().currentSchedule = schedule;
-            Session.set("currentUnitNumber", unit);
-            Session.set("questionIndex", 0);
+            currEngine.localSessionSet("currentUnitNumber", unit);
+            currEngine.localSessionSet("questionIndex", 0);
 
             //Blank out things that should restart with a schedule
-            Session.set("clusterIndex", undefined);
-            Session.set("currentQuestion", undefined);
-            Session.set("currentQuestionPart2",undefined);
-            Session.set("currentAnswer", undefined);
-            Session.set("testType", undefined);
+            currEngine.localSessionSett("clusterIndex", undefined);
+            currEngine.localSessionSet("currentQuestion", undefined);
+            currEngine.localSessionSet("currentQuestionPart2",undefined);
+            currEngine.localSessionSet("currentAnswer", undefined);
+            currEngine.localSessionSet("testType", undefined);
             clearScrollList();
         }
 
@@ -2761,14 +2761,18 @@ processUserTimesLog = function(expKey) {
         }
     });
 
-    Session.set("clusterIndex",             engine.localSessionGet("clusterIndex"));
-    Session.set("questionIndex",            engine.localSessionGet("questionIndex"));
-    Session.set("currentUnitNumber",        engine.localSessionGet("currentUnitNumber"));
-    Session.set("currentQuestion",          engine.localSessionGet("currentQuestion"));
-    Session.set("currentQuestionPart2",     engine.localSessionGet("currentQuestionPart2"));
-    Session.set("currentAnswer",            engine.localSessionGet("currentAnswer"));
-    Session.set("showOverlearningText",     engine.localSessionGet("showOverlearningText"));
-    Session.set("testType",                 engine.localSessionGet("testType"));
+    if (!!engine) {
+      //engine = previousEngine;
+
+      Session.set("clusterIndex",             engine.localSessionGet("clusterIndex"));
+      Session.set("questionIndex",            engine.localSessionGet("questionIndex"));
+      Session.set("currentUnitNumber",        engine.localSessionGet("currentUnitNumber"));
+      Session.set("currentQuestion",          engine.localSessionGet("currentQuestion"));
+      Session.set("currentQuestionPart2",     engine.localSessionGet("currentQuestionPart2"));
+      Session.set("currentAnswer",            engine.localSessionGet("currentAnswer"));
+      Session.set("showOverlearningText",     engine.localSessionGet("showOverlearningText"));
+      Session.set("testType",                 engine.localSessionGet("testType"));
+    }
 
     //If we make it here, then we know we won't need a resume until something
     //else happens
