@@ -131,6 +131,20 @@ function defaultUnitEngine() {
 //////////////////////////////////////////////////////////////////////////////
 // Return an instance of a unit with NO question/answer's (instruction-only)
 function emptyUnitEngine() {
+    localSession = {};
+    function initLocalSession(overrideData) {
+        var initVals = {
+            clusterIndex: 0,
+            questionIndex: 0,
+            currentUnitNumber: 0,
+            currentQuestion: "",
+            currentQuestionPart2: "",
+            currentAnswer: "",
+            showOverlearningText: false,
+            testType: ""
+        }
+    }
+
     return {
         unitType: "instruction-only",
 
@@ -140,7 +154,14 @@ function emptyUnitEngine() {
         findCurrentCardInfo: function() { },
         cardSelected: function(selectVal, resumeData) { },
         createQuestionLogEntry: function() { },
-        cardAnswered: function(wasCorrect, resumeData) { }
+        cardAnswered: function(wasCorrect, resumeData) { },
+        localSessionSet(property, value) {
+            localSession[property] = value;
+        },
+
+        localSessionGet(property) {
+            return localSession[property];
+        },
     };
 }
 

@@ -2122,39 +2122,13 @@ getUserTimesLogsAndEngines = function() {
   keys.forEach(function(key) {
     // Skip ID object
     if (key.includes("xml")) {
-      var currUnit = null;
-
       if (userLog[key][0].stimulusfile == Session.get("currentStimName")) {
         userLogsWithCurrentStim.push(userLog[key].map(function(entry) {
           entry.key = key;
           return entry;
         }));
 
-        var lastUnit = null;
-
-        for (var i = 0; i < userLog[key].length; i++) {
-          if (!!userLog[key][i].currentUnit || userLog[key][i].currentUnit == 0) {
-            currUnit = userLog[key][i].currentUnit;
-
-            if (currUnit != lastUnit) {
-              lastUnit = currUnit;
-
-              var keyFile = key.replace(/_([^_]*)$/, '.' + '$1');
-              
-              if (!engines[key]) {
-                engines[key] = {};
-              }
-
-              if (unitHasOption(currUnit, "assessmentsession", keyFile)) {
-                engines[key][currUnit] = createScheduleUnit();
-              } else if (unitHasOption(currUnit, "learningsession", keyFile)) {
-                engines[key][currUnit] = createModelUnit();
-              } else {
-                engines[key][currUnit] = createEmptyUnit();
-              }
-            }
-          }
-        }
+        engines[key] = createEmptyUnit();
       }
     }
   });
@@ -2485,25 +2459,29 @@ processUserTimesLog = function(expKey) {
     var resetEngine = function(currUnit, currEngine) {
         if (unitHasOption(currUnit, "assessmentsession")) {
             currEngine = createScheduleUnit();
+            currEngine.localSessionSet("sessionType","assessmentsession");
+            currEngine.localSessionSet("currentUnitNumber", currUnit);
+
             engine = currEngine;
 
-            currEngine.localSessionSet("sessionType","assessmentsession");
         }
         else if (unitHasOption(currUnit, "learningsession")) {
             currEngine = createModelUnit();
+            currEngine.localSessionSet("sessionType","learningsession");
+            currEngine.localSessionSet("currentUnitNumber", currUnit);
+
             engine = currEngine;
 
-            currEngine.localSessionSet("sessionType","learningsession");
-
-            if (cardProbs != undefined && cardProbs.length && cardProbs.length > 0) {
-              engine.initProbs(cardProbs);
-            }
+            // if (cardProbs != undefined && cardProbs.length && cardProbs.length > 0) {
+            //   engine.initProbs(cardProbs);
+            // }
         }
         else {
             currEngine = createEmptyUnit();
-            engine = currEngine;
-
             currEngine.localSessionSet("sessionType","empty");
+            currEngine.localSessionSet("currentUnitNumber", currUnit);
+
+            engine = currEngine;
         }
     };
 
@@ -2553,45 +2531,36 @@ processUserTimesLog = function(expKey) {
         var recordTimestamp = true;
 
         if (action === "instructions") {
-            var currEngine = engines[entry.key][entry.currentUnit];
-            previousEngine = currEngine;
+            previousEngine = engines[entry.key];
             //They've been shown instructions for this unit
             needFirstUnitInstructions = false;
             var instructUnit = entry.currentUnit;
             if (!!instructUnit || instructUnit === 0) {
-                currEngine.localSessionSet("currentUnitNumber", instructUnit);
-                currEngine.localSessionSet("questionIndex", 0);
-                currEngine.localSessionSet("clusterIndex", undefined);
-                currEngine.localSessionSet("currentQuestion", undefined);
-                currEngine.localSessionSet("currentQuestionPart2",undefined);
-                currEngine.localSessionSet("currentAnswer", undefined);
-                currEngine.localSessionSet("testType", undefined);
-
                 clearScrollList();
 
-                resetEngine(instructUnit, currEngine);
+                resetEngine(instructUnit, engines[entry.key]);
+
+                engines[entry.key].localSessionSet("currentUnitNumber", instructUnit);
+                engines[entry.key].localSessionSet("questionIndex", 0);
+                engines[entry.key].localSessionSet("clusterIndex", undefined);
+                engines[entry.key].localSessionSet("currentQuestion", undefined);
+                engines[entry.key].localSessionSet("currentQuestionPart2",undefined);
+                engines[entry.key].localSessionSet("currentAnswer", undefined);
+                engines[entry.key].localSessionSet("testType", undefined);
             }
         }
         
         else if (action === "unit-end") {
-            var currEngine = engines[entry.key][entry.currentUnit];
-            previousEngine = currEngine;
+            previousEngine = engines[entry.key];
             file = getTdfFromKeyFileName(entry.key);
             //Logged completion of unit - if this is the final unit we also
             //know that the TDF is completed
             var finishedUnit = _.intval(entry.currentUnit, -1);
-            var checkUnit = _.intval(Session.get("currentUnitNumber"), -2);
+            var checkUnit = _.intval(engines[entry.key].localSessionSet("currentUnitNumber"), -2);
             if (finishedUnit >= 0 && checkUnit === finishedUnit) {
                 //Correctly matches current unit - reset
                 needFirstUnitInstructions = false;
                 lastQuestionEntry = null;
-
-                currEngine.localSessionSet("questionIndex", 0);
-                currEngine.localSessionSet("clusterIndex", undefined);
-                currEngine.localSessionSet("currentQuestion", undefined);
-                currEngine.localSessionSet("currentQuestionPart2",undefined);
-                currEngine.localSessionSet("currentAnswer", undefined);
-                currEngine.localSessionSet("testType", undefined);
 
                 clearScrollList();
 
@@ -2602,9 +2571,15 @@ processUserTimesLog = function(expKey) {
                 else {
                     //Moving to next unit
                     checkUnit += 1;
-                    currEngine.localSessionSet("currentUnitNumber", checkUnit);
-                    resetEngine(checkUnit, currEngine);
+                    resetEngine(checkUnit, engines[entry.key]);
                 }
+
+                engines[entry.key].localSessionSet("questionIndex", 0);
+                engines[entry.key].localSessionSet("clusterIndex", undefined);
+                engines[entry.key].localSessionSet("currentQuestion", undefined);
+                engines[entry.key].localSessionSet("currentQuestionPart2",undefined);
+                engines[entry.key].localSessionSet("currentAnswer", undefined);
+                engines[entry.key].localSessionSet("testType", undefined);
             }
         }
 
@@ -2613,7 +2588,6 @@ processUserTimesLog = function(expKey) {
         }
 
         else if (action === "schedule") {
-          var currEngine = engines[entry.key][entry.unitindex];
             file = getTdfFromKeyFileName(entry.key);
             //Read in the previously created schedule
             lastQuestionEntry = null; //Kills the last question
@@ -2646,21 +2620,20 @@ processUserTimesLog = function(expKey) {
             //Update what we know about the session
             //Note that the schedule unit engine will see and use this
             getUserProgress().currentSchedule = schedule;
-            currEngine.localSessionSet("currentUnitNumber", unit);
-            currEngine.localSessionSet("questionIndex", 0);
+            engines[entry.key].localSessionSet("currentUnitNumber", unit);
+            engines[entry.key].localSessionSet("questionIndex", 0);
 
             //Blank out things that should restart with a schedule
-            currEngine.localSessionSet("clusterIndex", undefined);
-            currEngine.localSessionSet("currentQuestion", undefined);
-            currEngine.localSessionSet("currentQuestionPart2",undefined);
-            currEngine.localSessionSet("currentAnswer", undefined);
-            currEngine.localSessionSet("testType", undefined);
+            engines[entry.key].localSessionSet("clusterIndex", undefined);
+            engines[entry.key].localSessionSet("currentQuestion", undefined);
+            engines[entry.key].localSessionSet("currentQuestionPart2",undefined);
+            engines[entry.key].localSessionSet("currentAnswer", undefined);
+            engines[entry.key].localSessionSet("testType", undefined);
             clearScrollList();
         }
 
         else if (action === "question") {
-          previousEngine = currEngine;
-          var currEngine = engines[entry.key][entry.currentUnit]
+          previousEngine = engines[entry.key];
           //Read in previously asked question
           lastQuestionEntry = entry; //Always save the last question
           needFirstUnitInstructions = false;
@@ -2678,26 +2651,25 @@ processUserTimesLog = function(expKey) {
           //isn't a shufIndex, we just use the clusterIndex
           var cardIndex = entry.shufIndex || entry.clusterIndex;
           
-          currEngine.localSessionSet("clusterIndex",         cardIndex);
-          currEngine.localSessionSet("questionIndex",        entry.questionIndex);
-          currEngine.localSessionSet("currentUnitNumber",    entry.currentUnit);
-          currEngine.localSessionSet("currentQuestion",      entry.selectedQuestion);
-          currEngine.localSessionSet("currentQuestionPart2", entry.selectedQuestionPart2);
-          currEngine.localSessionSet("currentAnswer",        entry.selectedAnswer);
-          currEngine.localSessionSet("showOverlearningText", entry.showOverlearningText);
-          currEngine.localSessionSet("testType",             entry.testType);
+          engines[entry.key].localSessionSet("clusterIndex",         cardIndex);
+          engines[entry.key].localSessionSet("questionIndex",        entry.questionIndex);
+          engines[entry.key].localSessionSet("currentUnitNumber",    entry.currentUnit);
+          engines[entry.key].localSessionSet("currentQuestion",      entry.selectedQuestion);
+          engines[entry.key].localSessionSet("currentQuestionPart2", entry.selectedQuestionPart2);
+          engines[entry.key].localSessionSet("currentAnswer",        entry.selectedAnswer);
+          engines[entry.key].localSessionSet("showOverlearningText", entry.showOverlearningText);
+          engines[entry.key].localSessionSet("testType",             entry.testType);
 
           // Notify the current engine about the card selection (and note that
           // the engine knows that this is a resume because we're passing the
           // log entry back to it). The entry should include the original
           // selection value to pass in, but if it doesn't we default to
           // cardIndex (which should work for all units except the model)
-          currEngine.cardSelected(entry.selectVal || cardIndex, entry);
+          engines[entry.key].cardSelected(entry.selectVal || cardIndex, entry);
         }
 
         else if (action === "answer" || action === "[timeout]") {
-            previousEngine = currEngine;
-            var currEngine = engines[entry.key][utLogEngines.logs[index - 1].currentUnit || lastQuestionEntry.currentUnit];
+            previousEngine = engines[entry.key];
           
             //Read in the previously recorded answer (even if it was a timeout)
             needCurrentInstruction = false; //Answer means they got past the instructions
@@ -2722,12 +2694,12 @@ processUserTimesLog = function(expKey) {
 
             //Test type is always recorded with an answer, so we just reset it
             var testType = entry.ttype;
-            Session.set("testType", testType);
+            engines[entry.key].localSessionSet("testType", testType);
 
             //The session variables should be set up correctly from the question
             recordProgress(
-                currEngine.localSessionGet("currentQuestion"),
-                currEngine.localSessionGet("currentAnswer"),
+              engines[entry.key].localSessionGet("currentQuestion"),
+              engines[entry.key].localSessionGet("currentAnswer"),
                 entry.answer,
                 wasCorrect
             );
@@ -2741,7 +2713,7 @@ processUserTimesLog = function(expKey) {
             //Notify unit engine about card answer
             // Since answers don't track current unit, we get the unit from previous log entry which *should* be a question
             // In some situations it's not, so we also use the previously tracked current unit in case there is no preceding question
-            currEngine.cardAnswered(wasCorrect, entry);
+            engines[entry.key].cardAnswered(wasCorrect, entry);
 
             //We know the last question no longer applies
             lastQuestionEntry = null;
@@ -2755,16 +2727,14 @@ processUserTimesLog = function(expKey) {
         if (recordTimestamp && entry.clientSideTimeStamp) {
             Session.set("lastTimestamp", entry.clientSideTimeStamp);
 
-            if (Session.get("currentUnitNumber") > startTimeMinUnit) {
+            if (engine.localSessionGet("currentUnitNumber") > startTimeMinUnit) {
                 Session.set("currentUnitStartTime", Session.get("lastTimestamp"));
-                startTimeMinUnit = Session.get("currentUnitNumber");
+                startTimeMinUnit = engine.localSessionGet("currentUnitNumber");
             }
         }
     });
 
     if (!!engine) {
-      //engine = previousEngine;
-
       Session.set("clusterIndex",             engine.localSessionGet("clusterIndex"));
       Session.set("questionIndex",            engine.localSessionGet("questionIndex"));
       Session.set("currentUnitNumber",        engine.localSessionGet("currentUnitNumber"));
