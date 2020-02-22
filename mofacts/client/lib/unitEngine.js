@@ -157,6 +157,7 @@ function emptyUnitEngine() {
         cardAnswered: function(wasCorrect, resumeData) { },
         localSessionSet(property, value) {
             localSession[property] = value;
+            Session.set(property, value);
         },
 
         localSessionGet(property) {
