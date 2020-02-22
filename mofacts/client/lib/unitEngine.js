@@ -652,7 +652,7 @@ function modelUnitEngine() {
 
         localSessionSet(property, value) {
             localSession[property] = value;
-            //Session.set(property, value);
+            Session.set(property, value);
         },
 
         localSessionGet(property) {
@@ -662,7 +662,7 @@ function modelUnitEngine() {
         localSessionGetAll() {
             return localSession;
         },
-        
+
         selectNextCard: function() {
             // The cluster (card) index, the cluster version (stim index), and
             // whether or not we should show the overlearning text is determined
@@ -1077,7 +1077,7 @@ function scheduleUnitEngine() {
 
         localSessionSet(property, value) {
             localSession[property] = value;
-            //Session.set(property, value);
+            Session.set(property, value);
         },
 
         localSessionGet(property) {
