@@ -99,6 +99,8 @@ createScheduleUnit = function() {
 
 // Return an instance of the "base" engine
 function defaultUnitEngine() {
+
+    
     return {
         // Things actual engines must supply
         unitType: "DEFAULT",
@@ -124,6 +126,21 @@ function defaultUnitEngine() {
                     this.createQuestionLogEntry()
                 )
             );
+        },
+
+        localSession: {},
+
+        localSessionSet(property, value) {
+            this.localSession[property] = value;
+            Session.set(property, value);
+        },
+
+        localSessionGet(property) {
+            return this.localSession[property];
+        },
+
+        localSessionGetAll() {
+            return localSession;
         }
     };
 }
@@ -131,20 +148,6 @@ function defaultUnitEngine() {
 //////////////////////////////////////////////////////////////////////////////
 // Return an instance of a unit with NO question/answer's (instruction-only)
 function emptyUnitEngine() {
-
-    localSession = {};
-    function initLocalSession(overrideData) {
-        var initVals = {
-            clusterIndex: 0,
-            questionIndex: 0,
-            currentUnitNumber: 0,
-            currentQuestion: "",
-            currentQuestionPart2: "",
-            currentAnswer: "",
-            showOverlearningText: false,
-            testType: ""
-        }
-    }    
     return {
         unitType: "instruction-only",
 
@@ -155,19 +158,6 @@ function emptyUnitEngine() {
         cardSelected: function(selectVal, resumeData) { },
         createQuestionLogEntry: function() { },
         cardAnswered: function(wasCorrect, resumeData) { },
-        localSessionSet(property, value) {
-            localSession[property] = value;
-            Session.set(property, value);
-        },
-
-        localSessionGet(property) {
-            return localSession[property];
-        },
-
-        localSessionGetAll() {
-            return localSession;
-        }
-
     };
 }
 
@@ -255,19 +245,6 @@ function modelUnitEngine() {
         );
     }
 
-    localSession = {};
-    function initLocalSession(overrideData) {
-        var initVals = {
-            clusterIndex: 0,
-            questionIndex: 0,
-            currentUnitNumber: 0,
-            currentQuestion: "",
-            currentQuestionPart2: "",
-            currentAnswer: "",
-            showOverlearningText: false,
-            testType: ""
-        }
-    }
     //Initialize card probabilities, with optional initial data
     cardProbabilities = [];
     function initCardProbs(overrideData) {
@@ -648,19 +625,6 @@ function modelUnitEngine() {
 
         initImpl: function() {
             initializeActRModel();
-        },
-
-        localSessionSet(property, value) {
-            localSession[property] = value;
-            Session.set(property, value);
-        },
-
-        localSessionGet(property) {
-            return localSession[property];
-        },
-
-        localSessionGetAll() {
-            return localSession;
         },
 
         selectNextCard: function() {
@@ -1055,19 +1019,6 @@ function scheduleUnitEngine() {
         return schedule;
     }
 
-    localSession = {};
-    function initLocalSession(overrideData) {
-        var initVals = {
-            clusterIndex: 0,
-            questionIndex: 0,
-            currentUnitNumber: 0,
-            currentQuestion: "",
-            currentQuestionPart2: "",
-            currentAnswer: "",
-            showOverlearningText: false,
-            testType: ""
-        }
-    }
     return {
         unitType: "schedule",
 
@@ -1075,18 +1026,6 @@ function scheduleUnitEngine() {
             //Nothing currently
         },
 
-        localSessionSet(property, value) {
-            localSession[property] = value;
-            Session.set(property, value);
-        },
-
-        localSessionGet(property) {
-            return localSession[property];
-        },
-
-        localSessionGetAll() {
-            return localSession;
-        },
         selectNextCard: function() {
             // currently unused: var unit = getCurrentUnitNumber();
             var questionIndex = this.localSessionGet("questionIndex");

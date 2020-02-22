@@ -2459,32 +2459,30 @@ processUserTimesLog = function(expKey) {
 
     //Reset current engine
     var resetEngine = function(currUnit, currEngine) {
+        var tempEngine = {}; 
+
         if (unitHasOption(currUnit, "assessmentsession")) {
-            currEngine = createScheduleUnit();
-            currEngine.localSessionSet("sessionType","assessmentsession");
-            currEngine.localSessionSet("currentUnitNumber", currUnit);
-
-            engine = currEngine;
-
+            tempEngine = createScheduleUnit();
+            tempEngine.localSessionSet("sessionType","assessmentsession");
         }
         else if (unitHasOption(currUnit, "learningsession")) {
-            currEngine = createModelUnit();
-            currEngine.localSessionSet("sessionType","learningsession");
-            currEngine.localSessionSet("currentUnitNumber", currUnit);
-
-            engine = currEngine;
-
-            // if (cardProbs != undefined && cardProbs.length && cardProbs.length > 0) {
-            //   engine.initProbs(cardProbs);
-            // }
+            tempEngine = createModelUnit();
+            tempEngine.localSessionSet("sessionType","learningsession");
         }
         else {
-            currEngine = createEmptyUnit();
-            currEngine.localSessionSet("sessionType","empty");
-            currEngine.localSessionSet("currentUnitNumber", currUnit);
-
-            engine = currEngine;
+            tempEngine = createEmptyUnit();
+            tempEngine.localSessionSet("sessionType","empty");
         }
+
+        tempEngine.localSessionSet("currentUnitNumber", currUnit);
+
+        Object.assign(currEngine, tempEngine);
+
+        if (!engine) {
+          engine = {};
+        }
+
+        Object.assign(engine, currEngine);
     };
 
     //The last unit we captured start time for - this way we always get the
