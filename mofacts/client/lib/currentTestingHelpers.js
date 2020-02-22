@@ -35,11 +35,6 @@ getOriginalCurrentClusterIndex = function () {
   }
 }
 
-//Allow setting the current cluster index
-setCurrentClusterIndex = function(newIdx) {
-    Session.set("clusterIndex", newIdx);
-};
-
 //Return the total number of stim clusters
 getStimClusterCount = function() {
     return Stimuli.findOne({fileName: getCurrentStimName()})

@@ -131,6 +131,7 @@ function defaultUnitEngine() {
 //////////////////////////////////////////////////////////////////////////////
 // Return an instance of a unit with NO question/answer's (instruction-only)
 function emptyUnitEngine() {
+
     localSession = {};
     function initLocalSession(overrideData) {
         var initVals = {
@@ -143,8 +144,7 @@ function emptyUnitEngine() {
             showOverlearningText: false,
             testType: ""
         }
-    }
-
+    }    
     return {
         unitType: "instruction-only",
 
@@ -161,7 +161,7 @@ function emptyUnitEngine() {
 
         localSessionGet(property) {
             return localSession[property];
-        },
+        }
     };
 }
 
@@ -262,7 +262,6 @@ function modelUnitEngine() {
             testType: ""
         }
     }
-
     //Initialize card probabilities, with optional initial data
     cardProbabilities = [];
     function initCardProbs(overrideData) {
@@ -630,23 +629,6 @@ function modelUnitEngine() {
           return calculateCardProbabilities();
         },
 
-        getCardProbsUnmapped: function() {
-            // 
-            return cardProbabilities
-        },
-
-        setCardProbsRemapped: function() {
-
-        },
-
-        localSessionSet(property, value) {
-            localSession[property] = value;
-        },
-
-        localSessionGet(property) {
-            return localSession[property];
-        },
-
         unitType: "model",
 
         unitMode: (function(){
@@ -660,6 +642,15 @@ function modelUnitEngine() {
 
         initImpl: function() {
             initializeActRModel();
+        },
+
+        localSessionSet(property, value) {
+            localSession[property] = value;
+            Session.set(property, value);
+        },
+
+        localSessionGet(property) {
+            return localSession[property];
         },
 
         selectNextCard: function() {
@@ -705,12 +696,6 @@ function modelUnitEngine() {
             var cardIndex = prob.cardIndex;
             var card = cards[cardIndex];
             var whichStim = prob.stimIndex;
-
-            if (whichStim == -1) {
-                console.log("WHICH STIM -1");
-                console.log(prob);
-            }
-
             var stim = card.stims[whichStim];
 
             // Store calculated probability for selected stim/cluster
@@ -720,7 +705,7 @@ function modelUnitEngine() {
 
             // Save the card selection
             // Note that we always take the first stimulus and it's always a drill
-            setCurrentClusterIndex(cardIndex);
+            this.localSessionSet("clusterIndex", cardIndex);
             this.localSessionSet("currentQuestion", fastGetStimQuestion(cardIndex, whichStim));
             var currentQuestion = this.localSessionGet("currentQuestion");
             //If we have a dual prompt question populate the spare data field
@@ -732,7 +717,7 @@ function modelUnitEngine() {
           //    console.log("two part question detected: " + prompts[0] + ",,," + prompts[1]);
             }else{
           //    console.log("Q: " +prompts[0]);
-              this.localSessionSet("currentQuestionPart2",undefined);
+          this.localSessionSet("currentQuestionPart2",undefined);
             }
 
             this.localSessionSet("currentAnswer", fastGetStimAnswer(cardIndex, whichStim));
@@ -744,7 +729,7 @@ function modelUnitEngine() {
                 this.localSessionSet("testType", "d");
               }
             }else{
-              this.localSessionSet("testType", "d");
+                this.localSessionSet("testType", "d");
             }
             this.localSessionSet("questionIndex", 1);  //questionIndex doesn't have any meaning for a model
             this.localSessionSet("showOverlearningText", showOverlearningText);
@@ -1029,6 +1014,7 @@ function scheduleUnitEngine() {
             console.log("CREATING SCHEDULE, showing progress");
             console.log(progress);
 
+            // TODO: set current tdf filename
             var file = getCurrentTdfFile();
             var setSpec = file.tdfs.tutor.setspec[0];
             var currUnit = file.tdfs.tutor.unit[unit];
@@ -1072,7 +1058,6 @@ function scheduleUnitEngine() {
             testType: ""
         }
     }
-
     return {
         unitType: "schedule",
 
@@ -1082,12 +1067,12 @@ function scheduleUnitEngine() {
 
         localSessionSet(property, value) {
             localSession[property] = value;
+            Session.set(property, value);
         },
 
         localSessionGet(property) {
             return localSession[property];
         },
-
         selectNextCard: function() {
             // currently unused: var unit = getCurrentUnitNumber();
             var questionIndex = this.localSessionGet("questionIndex");
@@ -1096,7 +1081,7 @@ function scheduleUnitEngine() {
 
             //Set current Q/A info, type of test (drill, test, study), and then
             //increment the session's question index number
-            setCurrentClusterIndex(questInfo.clusterIndex);
+            this.localSessionSet("clusterIndex", questInfo.clusterIndex);
             this.localSessionSet("currentQuestion", getCurrentStimQuestion(whichStim));
             var currentQuestion = this.localSessionGet("currentQuestion");
             //If we have a dual prompt question populate the spare data field
@@ -1120,6 +1105,15 @@ function scheduleUnitEngine() {
                 "whichStim:", whichStim,
                 "parameter", getCurrentStimParameter(whichStim)
             );
+
+            Session.set("clusterIndex",             engine.localSessionGet("clusterIndex"));
+            Session.set("questionIndex",            engine.localSessionGet("questionIndex"));
+            Session.set("currentUnitNumber",        engine.localSessionGet("currentUnitNumber"));
+            Session.set("currentQuestion",          engine.localSessionGet("currentQuestion"));
+            Session.set("currentQuestionPart2",     engine.localSessionGet("currentQuestionPart2"));
+            Session.set("currentAnswer",            engine.localSessionGet("currentAnswer"));
+            Session.set("showOverlearningText",     engine.localSessionGet("showOverlearningText"));
+            Session.set("testType",                 engine.localSessionGet("testType"));
 
             return questInfo.clusterIndex;
         },
@@ -1155,7 +1149,7 @@ function scheduleUnitEngine() {
 
         unitFinished: function() {
             var questionIndex = this.localSessionGet("questionIndex");
-            var unit = this.localSessionGet("currentUnitNumber");
+            var unit = getCurrentUnitNumber();
             var schedule = null;
             if (unit < getCurrentTdfFile().tdfs.tutor.unit.length) {
                 schedule = getSchedule();

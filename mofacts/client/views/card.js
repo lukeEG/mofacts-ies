@@ -1548,7 +1548,7 @@ function startQuestionTimeout(textFocus) {
   var timeuntilstimulus = getCurrentDeliveryParams().timeuntilstimulus;
   console.log('++++ CURRENT QUESTION ++++');
   console.log(Session.get('currentQuestion'));
-  var curQuestionTemp = Session.get("currentQuestion");
+  var curQuestionTemp = engine.localSessionGet("currentQuestion");
   var prestimulusDisplay = getCurrentTdfFile().tdfs.tutor.setspec[0].prestimulusDisplay;
   Session.set("currentQuestion",prestimulusDisplay);
 
@@ -2107,9 +2107,11 @@ function allowUserInput(textFocus) {
 // BEGIN Resume Logic
 
 getTdfFromKeyFileName = function(keyFileName) {
-  var fileName = keyFileName.replace(/_([^_]*)$/, '.' + '$1');
+  return Tdfs.findOne({fileName: keyFileName});
+}
 
-  return Tdfs.findOne({fileName: fileName});
+replaceUnderscoreInTdfName = function(tdfNameWithUnderscore) {
+  return tdfNameWithUnderscore.replace(/_([^_]*)$/, '.' + '$1');
 }
 
 // Return concatenated list of user times logs with current stimulus
@@ -2124,11 +2126,11 @@ getUserTimesLogsAndEngines = function() {
     if (key.includes("xml")) {
       if (userLog[key][0].stimulusfile == Session.get("currentStimName")) {
         userLogsWithCurrentStim.push(userLog[key].map(function(entry) {
-          entry.key = key;
+          entry.key = replaceUnderscoreInTdfName(key);
           return entry;
         }));
 
-        engines[key] = createEmptyUnit();
+        engines[replaceUnderscoreInTdfName(key)] = createEmptyUnit();
       }
     }
   });
@@ -2532,6 +2534,7 @@ processUserTimesLog = function(expKey) {
 
         if (action === "instructions") {
             previousEngine = engines[entry.key];
+            
             //They've been shown instructions for this unit
             needFirstUnitInstructions = false;
             var instructUnit = entry.currentUnit;
@@ -2547,6 +2550,7 @@ processUserTimesLog = function(expKey) {
                 engines[entry.key].localSessionSet("currentQuestionPart2",undefined);
                 engines[entry.key].localSessionSet("currentAnswer", undefined);
                 engines[entry.key].localSessionSet("testType", undefined);
+                engines[entry.key].localSessionSet("currentTdfName", entry.key);
             }
         }
         
@@ -2580,6 +2584,7 @@ processUserTimesLog = function(expKey) {
                 engines[entry.key].localSessionSet("currentQuestionPart2",undefined);
                 engines[entry.key].localSessionSet("currentAnswer", undefined);
                 engines[entry.key].localSessionSet("testType", undefined);
+                engines[entry.key].localSessionSet("currentTdfName", entry.key);
             }
         }
 
@@ -2629,6 +2634,7 @@ processUserTimesLog = function(expKey) {
             engines[entry.key].localSessionSet("currentQuestionPart2",undefined);
             engines[entry.key].localSessionSet("currentAnswer", undefined);
             engines[entry.key].localSessionSet("testType", undefined);
+            engines[entry.key].localSessionSet("currentTdfName", entry.key);
             clearScrollList();
         }
 
@@ -2659,6 +2665,7 @@ processUserTimesLog = function(expKey) {
           engines[entry.key].localSessionSet("currentAnswer",        entry.selectedAnswer);
           engines[entry.key].localSessionSet("showOverlearningText", entry.showOverlearningText);
           engines[entry.key].localSessionSet("testType",             entry.testType);
+          engines[entry.key].localSessionSet("currentTdfName",       entry.key);
 
           // Notify the current engine about the card selection (and note that
           // the engine knows that this is a resume because we're passing the
@@ -2743,6 +2750,7 @@ processUserTimesLog = function(expKey) {
       Session.set("currentAnswer",            engine.localSessionGet("currentAnswer"));
       Session.set("showOverlearningText",     engine.localSessionGet("showOverlearningText"));
       Session.set("testType",                 engine.localSessionGet("testType"));
+      Session.set("currentTdfName",           engine.localSessionGet("currentTdfName"));
     }
 
     //If we make it here, then we know we won't need a resume until something
