@@ -2494,7 +2494,7 @@ processUserTimesLog = function(expKey) {
     // Returns an array of objects, each containing an array of userTimesLogs and their corresponding engine
     // Each action has a 'key' value that is the key value for its engine
     var utLogEngines = getUserTimesLogsAndEngines();
-    var engines = utLogEngines.engines;
+    engines = utLogEngines.engines;
     
     // We'll track the previous engine so we can pull its probabilities, map to raw cluster index,
     // and then remap it back to the current engine (to maintain card/prob state across engines)
@@ -2576,6 +2576,7 @@ processUserTimesLog = function(expKey) {
                     //Moving to next unit
                     checkUnit += 1;
                     resetEngine(checkUnit, engines[entry.key]);
+                    engines[entry.key].localSessionSet("currentUnitNumber", checkUnit);
                 }
 
                 engines[entry.key].localSessionSet("questionIndex", 0);

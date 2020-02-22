@@ -162,7 +162,12 @@ function emptyUnitEngine() {
 
         localSessionGet(property) {
             return localSession[property];
+        },
+
+        localSessionGetAll() {
+            return localSession;
         }
+
     };
 }
 
@@ -647,13 +652,17 @@ function modelUnitEngine() {
 
         localSessionSet(property, value) {
             localSession[property] = value;
-            Session.set(property, value);
+            //Session.set(property, value);
         },
 
         localSessionGet(property) {
             return localSession[property];
         },
 
+        localSessionGetAll() {
+            return localSession;
+        },
+        
         selectNextCard: function() {
             // The cluster (card) index, the cluster version (stim index), and
             // whether or not we should show the overlearning text is determined
@@ -1068,11 +1077,15 @@ function scheduleUnitEngine() {
 
         localSessionSet(property, value) {
             localSession[property] = value;
-            Session.set(property, value);
+            //Session.set(property, value);
         },
 
         localSessionGet(property) {
             return localSession[property];
+        },
+
+        localSessionGetAll() {
+            return localSession;
         },
         selectNextCard: function() {
             // currently unused: var unit = getCurrentUnitNumber();
