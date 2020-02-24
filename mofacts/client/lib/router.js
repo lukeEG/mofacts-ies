@@ -327,7 +327,7 @@ Router.route('/instructions', {
             console.log("No one logged in - allowing template to handle");
         }
         else {
-            var unit = getCurrentTdfUnit();
+            var unit = getCurrentTdfUnit(); //TODO refactor to put this inside instruct continue
             var txt = _.chain(unit).prop("unitinstructions").first().trim().value();
             var pic = _.chain(unit).prop("picture").first().trim().value();
             if (!txt && !pic) {

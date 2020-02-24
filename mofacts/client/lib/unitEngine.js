@@ -73,8 +73,8 @@ honored across all session types.
 ******************************************************************************/
 
 //Helper for our "public" functions
-function create(func) {
-    var engine = _.extend(defaultUnitEngine(), func());
+function create(func,contextData) {
+    var engine = _.extend(defaultUnitEngine(), func(contextData));
     engine.init();
     return engine;
 }
@@ -85,22 +85,20 @@ stripSpacesAndLowerCase = function(input){
   return input.replace(/ /g,'').toLowerCase();
 }
 
-createEmptyUnit = function() {
-    return create(emptyUnitEngine);
-};
+createEmptyUnit = function(contextData) {
+    return create(emptyUnitEngine,contextData);
+}
 
-createModelUnit = function() {
-    return create(modelUnitEngine);
-};
+createModelUnit = function(contextData) {
+    return create(modelUnitEngine,contextData);
+}
 
-createScheduleUnit = function() {
-    return create(scheduleUnitEngine);
-};
+createScheduleUnit = function(contextData) {
+    return create(scheduleUnitEngine,contextData);
+}
 
 // Return an instance of the "base" engine
 function defaultUnitEngine() {
-
-    
     return {
         // Things actual engines must supply
         unitType: "DEFAULT",
@@ -120,12 +118,24 @@ function defaultUnitEngine() {
         },
 
         writeQuestionEntry: function(selectVal) {
-            recordUserTimeQuestion(
-                _.extend(
-                    { selType: this.unitType, 'selectVal': selectVal },
-                    this.createQuestionLogEntry()
-                )
-            );
+            let curClusterIndex = this.localSessionGet("clusterIndex");
+
+            let dataRec = _.extend(
+                { 
+                    clusterIndex:         getRawClusterIndex(curClusterIndex),
+                    shufIndex:            curClusterIndex,
+                    questionIndex:        this.localSessionGet("questionIndex"),
+                    currentUnit:          this.localSessionGet("currentUnitNumber"),
+                    selectedQuestion:     this.localSessionGet("currentQuestion"),
+                    selectedQuestionPart2:this.localSessionGet("currentQuestionPart2"),
+                    selectedAnswer:       this.localSessionGet("currentAnswer"),
+                    showOverlearningText: this.localSessionGet("showOverlearningText"),
+                    testType:             this.localSessionGet("testType"),
+                    selType:              this.unitType, 
+                    selectVal:            selectVal 
+                },
+                this.createQuestionLogEntry());
+            recordUserTime("question", dataRec);
         },
 
         localSession: {},
@@ -140,14 +150,19 @@ function defaultUnitEngine() {
 
         localSessionGetAll() {
             return localSession;
+        },
+
+        getRawClusterIndex(clusterIndex){
+            return this.localSession['clusterMapping'][clusterIndex];
         }
     };
 }
 
 //////////////////////////////////////////////////////////////////////////////
 // Return an instance of a unit with NO question/answer's (instruction-only)
-function emptyUnitEngine() {
+function emptyUnitEngine(contextData) {
     return {
+        contextData:contextData,
         unitType: "instruction-only",
 
         unitFinished: function() { return true; },
@@ -190,353 +205,397 @@ function emptyUnitEngine() {
 */
 
 
-function modelUnitEngine() {
+function modelUnitEngine(contextData) {
     console.log('model unit engine created!!!');
     //Checked against practice seconds. Notice that we capture this on unit
     //creation, so if they leave in the middle of practice and come back to
     //the unit we'll start all over.
-    var unitStartTimestamp = Date.now();
+    return { unitStartTimestamp = Date.now(),
 
-    var unitMode = _.chain(getCurrentTdfUnit())
-        .prop("learningsession").first()
-        .prop("unitMode").trim().value();
-        //getCurrentDeliveryParams().unitMode;
+        getStimParameterArray: function(rawClusterIndex,whichParameter,stimFileName){
+        return _.chain(getStimCluster(rawClusterIndex,stimFileName))
+                .prop("parameter")
+                .prop(_.intval(whichParameter))
+                .split(',')
+                .map(x => _.floatval(x))
+                .value();
+        },
 
-    //We cache the stimuli found since it shouldn't change during the unit
-    var cachedStimuli = null;
-    fastGetStimCluster =function(index) {
-        if (!cachedStimuli) {
-            cachedStimuli = Stimuli.findOne({fileName: getCurrentStimName()});
-        }
-        return getStimCluster(index, cachedStimuli);
-    }
+        currentCardInfo : {
+            testType: 'd',
+            clusterIndex: -1,
+            condition: '',
+            whichStim : -1,
+            forceButtonTrial: false
+        },
 
-    function getStimParameterArray(clusterIndex,whichParameter){
-      return _.chain(fastGetStimCluster(clusterIndex))
-            .prop("parameter")
-            .prop(_.intval(whichParameter))
-            .split(',')
-            .map(x => _.floatval(x))
-            .value();
-    }
+        setCurrentCardInfo: function(clusterIndex, whichStim) {
+            this.currentCardInfo.clusterIndex = clusterIndex;
+            this.currentCardInfo.whichStim = whichStim;
+            let stimFileName = this.localSessionGet("stimFileName");
+            console.log("MODEL UNIT card selection => ",
+                "cluster-idx:", clusterIndex,
+                "whichStim:", whichStim,
+                "parameter", this.getStimParameterArray(clusterIndex, whichStim,stimFileName)
+            );
+        },
 
-    fastGetStimQuestion = function(index, whichQuestion) {
-        return fastGetStimCluster(index).display[whichQuestion];
-    }
-    function fastGetStimAnswer(index, whichAnswer) {
-        return fastGetStimCluster(index).response[whichAnswer];
-    }
+        //Initialize card probabilities, with optional initial data
+        cardProbabilities = [],
 
-    var currentCardInfo = {
-        testType: 'd',
-        clusterIndex: -1,
-        condition: '',
-        whichStim : -1,
-        forceButtonTrial: false
-    };
-    function setCurrentCardInfo(clusterIndex, whichStim) {
-        currentCardInfo.clusterIndex = clusterIndex;
-        currentCardInfo.whichStim = whichStim;
-        console.log("MODEL UNIT card selection => ",
-            "cluster-idx:", clusterIndex,
-            "whichStim:", whichStim,
-            "parameter", getStimParameterArray(clusterIndex, whichStim)
-        );
-    }
-
-    //Initialize card probabilities, with optional initial data
-    cardProbabilities = [];
-    function initCardProbs(overrideData) {
-        var initVals = {
-            numQuestionsAnswered: 0,
-            numQuestionsIntroduced: 0,
-            numCorrectAnswers: 0,
-            cards: []
-        };
-
-        if (!!overrideData) {
-            initVals = _.extend(initVals, overrideData);
-        }
-        cardProbabilities = initVals;
-    }
-
-    // Initialize cards as we'll need them for the created engine (for current
-    // model). Note that we assume TDF/Stimulus is set up and correct - AND
-    // that we've already turned off cluster mapping. You'll note that although
-    // we nest stims under cards, we maintain a "flat" list of probabilities -
-    // this is to speed up calculations and make iteration below easier
-    function initializeActRModel() {
-        var i, j;
-
-        var numQuestions = getStimClusterCount();
-        var initCards = [];
-        var initResponses = {};
-        var initProbs = [];
-        for (i = 0; i < numQuestions; ++i) {
-            var card = {
-                questionSuccessCount: 0,
-                questionFailureCount: 0,
-                studyTrialCount: 0,
-                trialsSinceLastSeen: 3,  // We start at >2 for initial logic (see findMin/Max functions below)
-                lastShownTimestamp: 0,
-                firstShownTimestamp: 0,
-                hasBeenIntroduced: false,
-                canUse: false,
-                stims: [],
-                practiceTimes: [],
-                otherPracticeTimeSinceFirst: 0,
-                otherPracticeTimeSinceLast: 0,
-                outcomeHistory: [],
-                previousCalculatedProbabilities: []
+        initCardProbs: function(overrideData) {
+            var initVals = {
+                numQuestionsAnswered: 0,
+                numQuestionsIntroduced: 0,
+                numCorrectAnswers: 0,
+                cards: []
             };
 
-            // We keep per-stim and re-response-text results as well
-            var cluster = fastGetStimCluster(i);
-            var numStims = _.chain(cluster).prop("display").prop("length").intval().value();
-            for (j = 0; j < numStims; ++j) {
-                var parameter = getStimParameterArray(i,j); //Note this may be a single element array for older stims or a 3 digit array for newer ones
-                // Per-stim counts
-                card.stims.push({
-                    stimSuccessCount: 0,
-                    stimFailureCount: 0,
-                    hasBeenIntroduced: false,
-                    parameter: parameter,
-                    outcomeHistory: [],
-                    previousCalculatedProbabilities: [],
+            if (!!overrideData) {
+                initVals = _.extend(initVals, overrideData);
+            }
+            this.cardProbabilities = initVals;
+        },
+
+        // Initialize cards as we'll need them for the created engine (for current
+        // model). Note that we assume TDF/Stimulus is set up and correct - AND
+        // that we've already turned off cluster mapping. You'll note that although
+        // we nest stims under cards, we maintain a "flat" list of probabilities -
+        // this is to speed up calculations and make iteration below easier
+        initializeActRModel: function() {
+            var i, j;
+
+            var numQuestions = getStimClusterCount();
+            var initCards = [];
+            var initResponses = {};
+            var initProbs = [];
+            for (i = 0; i < numQuestions; ++i) {
+                var card = {
+                    questionSuccessCount: 0,
+                    questionFailureCount: 0,
+                    studyTrialCount: 0,
+                    trialsSinceLastSeen: 3,  // We start at >2 for initial logic (see findMin/Max functions below)
                     lastShownTimestamp: 0,
                     firstShownTimestamp: 0,
+                    hasBeenIntroduced: false,
+                    canUse: false,
+                    stims: [],
+                    practiceTimes: [],
                     otherPracticeTimeSinceFirst: 0,
                     otherPracticeTimeSinceLast: 0,
-                });
+                    outcomeHistory: [],
+                    previousCalculatedProbabilities: []
+                };
 
-                initProbs.push({
-                    cardIndex: i,
-                    stimIndex: j,
-                    probability: 0
-                });
-
-                // Per-response counts
-                var response = stripSpacesAndLowerCase(Answers.getDisplayAnswerText(cluster.response[j]));
-                if (!(response in initResponses)) {
-                    initResponses[response] = {
-                        responseSuccessCount: 0,
-                        responseFailureCount: 0,
-                        lastShownTimestamp: 0,
+                // We keep per-stim and re-response-text results as well
+                let rawClusterIndex = this.getRawClusterIndex(i); //We can only do this because cluster-mapping entries come right before instructions (where we initialize)
+                var cluster = getStimCluster(rawClusterIndex,this.contextData.currentStimName); 
+                var numStims = _.chain(cluster).prop("display").prop("length").intval().value();
+                for (j = 0; j < numStims; ++j) {
+                    var parameter = this.getStimParameterArray(i,j,this.contextData.currentStimName); //Note this may be a single element array for older stims or a 3 digit array for newer ones
+                    // Per-stim counts
+                    card.stims.push({
+                        stimSuccessCount: 0,
+                        stimFailureCount: 0,
+                        hasBeenIntroduced: false,
+                        parameter: parameter,
                         outcomeHistory: [],
-                    };
+                        previousCalculatedProbabilities: [],
+                        lastShownTimestamp: 0,
+                        firstShownTimestamp: 0,
+                        otherPracticeTimeSinceFirst: 0,
+                        otherPracticeTimeSinceLast: 0,
+                    });
+
+                    initProbs.push({
+                        cardIndex: i,
+                        stimIndex: j,
+                        probability: 0
+                    });
+
+                    // Per-response counts
+                    var response = stripSpacesAndLowerCase(Answers.getDisplayAnswerText(cluster.response[j]));
+                    if (!(response in initResponses)) {
+                        initResponses[response] = {
+                            responseSuccessCount: 0,
+                            responseFailureCount: 0,
+                            lastShownTimestamp: 0,
+                            outcomeHistory: [],
+                        };
+                    }
+                }
+
+                initCards.push(card);
+            }
+
+            // Figure out which cluster numbers that they want
+            var unitClusterList = _.chain(getTdfUnit(this.contextData.currentTdfName,this.contextData.currentUnitNumber))
+                .prop("learningsession").first()
+                .prop("clusterlist").trim().value();
+
+            var clusterList = [];
+            Helpers.extractDelimFields(unitClusterList, clusterList);
+            for (i = 0; i < clusterList.length; ++i) {
+                var nums = Helpers.rangeVal(clusterList[i]);
+                for (j = 0; j < nums.length; ++j) {
+                    initCards[_.intval(nums[j])].canUse = true;
                 }
             }
 
-            initCards.push(card);
-        }
+            //Re-init the card probabilities
+            this.initCardProbs({
+                cards: initCards,                           // List of cards (each of which has stims)
+                responses: initResponses,                   // Dictionary of text responses for
+                probs: initProbs,                           // "Flat" list of probabilities
+            });
 
-        // Figure out which cluster numbers that they want
-        var unitClusterList = _.chain(getCurrentTdfUnit())
+            //has to be done once ahead of time to give valid values for the beginning of the test.
+            calculateCardProbabilities();
+        },
+
+        // Helpers for time/display/calc below
+        secs: function(t) {
+            return t / 1000.0;
+        },
+        elapsed: function(t) {
+            return t < 1 ? 0 : this.secs(Date.now() - t);
+        },
+
+        // This is the final probability calculation used below if one isn't given
+        // in the unit's learningsession/calculateProbability tag
+        defaultProbFunction: function(p) {
+            //        p.y = p.stimParameter+
+            //        0.866310634* ((0.5 + p.stimSuccessCount)/(1 + p.stimSuccessCount + p.stimFailureCount) - 0.5)+
+            //        0.270707611* ((0.5 + p.questionSuccessCount)/(1 + p.questionSuccessCount + p.questionFailureCount) - 0.5)+
+            //        0.869477261* ((0.5 + p.responseSuccessCount)/(1 + p.responseSuccessCount + p.responseFailureCount) - 0.5)+
+            //        3.642734384* ((0.5 + p.userCorrectResponses)/(1 + p.userTotalResponses) - 0.5)+
+            //        3.714113953* (p.recency)+
+            //        2.244795778* p.intbs * Math.log(1 + p.stimSuccessCount + p.stimFailureCount) +
+            //        0.447943182* p.intbs * Math.log(1 + p.questionStudyTrialCount) +
+            //        0.500901271* p.intbs * Math.log(1 + p.responseSuccessCount + p.responseFailureCount);
+
+            // Calculated metrics
+            p.baseLevel = 1 / Math.pow(1 + p.questionSecsPracticingOthers + ((p.questionSecsSinceFirstShown - p.questionSecsPracticingOthers) * 0.00785),  0.2514);
+
+            p.meanSpacing = 0;
+
+            if (p.questionStudyTrialCount + p.questionTotalTests == 1) {
+                p.meanspacing = 1;
+            } else {
+                if (p.questionStudyTrialCount + p.questionTotalTests > 1) {
+                    p.meanSpacing = Math.max(
+                            1, Math.pow((p.questionSecsSinceFirstShown - p.questionSecsSinceLastShown) / (p.questionStudyTrialCount + p.questionTotalTests - 1), 0.0294)
+                            );
+                }
+            }
+
+            p.intbs = p.meanSpacing * p.baseLevel;
+
+            p.recency = p.questionSecsSinceLastShown === 0 ? 0 : 1 / Math.pow(1 + p.questionSecsSinceLastShown, 0.2514);
+
+            p.y = p.stimParameters[0] +
+            0.55033* Math.log((2+ p.stimSuccessCount)/(2+ p.stimFailureCount))+
+            0.88648* Math.log((2 + p.responseSuccessCount)/(2 + p.responseFailureCount))+
+            1.00719* Math.log((10 + p.userCorrectResponses)/(10 + p.userTotalResponses-p.userCorrectResponses))+
+            3.20689* (p.recency)+
+            4.57174* p.intbs * Math.log(1 + p.stimSuccessCount + p.stimFailureCount) +
+            0.74734* p.intbs * Math.log(1 + p.responseSuccessCount + p.responseFailureCount);
+            p.probability = 1.0 / (1.0 + Math.exp(-p.y));  // Actual probability
+            return p;
+        },
+
+        //TODO: redo into IIFE
+
+        // See if they specified a probability function
+        probFunction: (function(){
+            _.chain(getTdfUnit(this.contextData.currentTdfName,this.contextData.currentUnitNumber))
             .prop("learningsession").first()
-            .prop("clusterlist").trim().value();
-
-        var clusterList = [];
-        Helpers.extractDelimFields(unitClusterList, clusterList);
-        for (i = 0; i < clusterList.length; ++i) {
-            var nums = Helpers.rangeVal(clusterList[i]);
-            for (j = 0; j < nums.length; ++j) {
-                initCards[_.intval(nums[j])].canUse = true;
+            .prop("calculateProbability").first().trim().value();
+            if (!!probFunction) {
+                probFunction = new Function("p", "'use strict';\n" + probFunction);  // jshint ignore:line
             }
-        }
-
-        //Re-init the card probabilities
-        initCardProbs({
-            cards: initCards,                           // List of cards (each of which has stims)
-            responses: initResponses,                   // Dictionary of text responses for
-            probs: initProbs,                           // "Flat" list of probabilities
-        });
-
-        //has to be done once ahead of time to give valid values for the beginning of the test.
-        calculateCardProbabilities();
-    }
-
-    // Helpers for time/display/calc below
-    function secs(t) {
-        return t / 1000.0;
-    }
-    function elapsed(t) {
-        return t < 1 ? 0 : secs(Date.now() - t);
-    }
-
-    // This is the final probability calculation used below if one isn't given
-    // in the unit's learningsession/calculateProbability tag
-    function defaultProbFunction(p) {
-        //        p.y = p.stimParameter+
-        //        0.866310634* ((0.5 + p.stimSuccessCount)/(1 + p.stimSuccessCount + p.stimFailureCount) - 0.5)+
-        //        0.270707611* ((0.5 + p.questionSuccessCount)/(1 + p.questionSuccessCount + p.questionFailureCount) - 0.5)+
-        //        0.869477261* ((0.5 + p.responseSuccessCount)/(1 + p.responseSuccessCount + p.responseFailureCount) - 0.5)+
-        //        3.642734384* ((0.5 + p.userCorrectResponses)/(1 + p.userTotalResponses) - 0.5)+
-        //        3.714113953* (p.recency)+
-        //        2.244795778* p.intbs * Math.log(1 + p.stimSuccessCount + p.stimFailureCount) +
-        //        0.447943182* p.intbs * Math.log(1 + p.questionStudyTrialCount) +
-        //        0.500901271* p.intbs * Math.log(1 + p.responseSuccessCount + p.responseFailureCount);
-
-        // Calculated metrics
-        p.baseLevel = 1 / Math.pow(1 + p.questionSecsPracticingOthers + ((p.questionSecsSinceFirstShown - p.questionSecsPracticingOthers) * 0.00785),  0.2514);
-
-        p.meanSpacing = 0;
-
-        if (p.questionStudyTrialCount + p.questionTotalTests == 1) {
-            p.meanspacing = 1;
-        } else {
-            if (p.questionStudyTrialCount + p.questionTotalTests > 1) {
-                p.meanSpacing = Math.max(
-                        1, Math.pow((p.questionSecsSinceFirstShown - p.questionSecsSinceLastShown) / (p.questionStudyTrialCount + p.questionTotalTests - 1), 0.0294)
-                        );
+            else {
+                probFunction = this.defaultProbFunction;
             }
-        }
-
-        p.intbs = p.meanSpacing * p.baseLevel;
-
-        p.recency = p.questionSecsSinceLastShown === 0 ? 0 : 1 / Math.pow(1 + p.questionSecsSinceLastShown, 0.2514);
-
-        p.y = p.stimParameters[0] +
-        0.55033* Math.log((2+ p.stimSuccessCount)/(2+ p.stimFailureCount))+
-        0.88648* Math.log((2 + p.responseSuccessCount)/(2 + p.responseFailureCount))+
-        1.00719* Math.log((10 + p.userCorrectResponses)/(10 + p.userTotalResponses-p.userCorrectResponses))+
-        3.20689* (p.recency)+
-        4.57174* p.intbs * Math.log(1 + p.stimSuccessCount + p.stimFailureCount) +
-        0.74734* p.intbs * Math.log(1 + p.responseSuccessCount + p.responseFailureCount);
-        p.probability = 1.0 / (1.0 + Math.exp(-p.y));  // Actual probability
-        return p;
-    }
-
-    // See if they specified a probability function
-    var probFunction = _.chain(getCurrentTdfUnit())
-        .prop("learningsession").first()
-        .prop("calculateProbability").first().trim().value();
-    if (!!probFunction) {
-        probFunction = new Function("p", "'use strict';\n" + probFunction);  // jshint ignore:line
-    }
-    else {
-        probFunction = defaultProbFunction;
-    }
+        }(),
 
 
-    // Given a single item from the cardProbabilities.probs array, calculate the
-    // current probability. IMPORTANT: this function only returns ALL parameters
-    // used which include probability. The caller is responsible for storing it.
-    function calculateSingleProb(prob) {
-        var card = cardProbabilities.cards[prob.cardIndex];
-        var stim = card.stims[prob.stimIndex];
+        // Given a single item from the cardProbabilities.probs array, calculate the
+        // current probability. IMPORTANT: this function only returns ALL parameters
+        // used which include probability. The caller is responsible for storing it.
+        function calculateSingleProb(prob) {
+            var card = this.cardProbabilities.cards[prob.cardIndex];
+            var stim = card.stims[prob.stimIndex];
 
-        // Possibly useful one day
-        // var userTotalTrials = cardProbabilities.numQuestionsIntroduced;
-        // var totalPracticeSecs = secs(
-        //     _.chain(cards).pluck('practiceTimes').flatten().sum().value()
-        // );
-        // var questionTrialsSinceLastSeen = card.trialsSinceLastSeen;
-        // var questionHasBeenIntroduced = card.hasBeenIntroduced;
-        // var questionSecsInPractice = secs(_.sum(card.practiceTimes));
-        // var stimHasBeenIntroduced = stim.hasBeenIntroduced;
+            // Possibly useful one day
+            // var userTotalTrials = cardProbabilities.numQuestionsIntroduced;
+            // var totalPracticeSecs = secs(
+            //     _.chain(cards).pluck('practiceTimes').flatten().sum().value()
+            // );
+            // var questionTrialsSinceLastSeen = card.trialsSinceLastSeen;
+            // var questionHasBeenIntroduced = card.hasBeenIntroduced;
+            // var questionSecsInPractice = secs(_.sum(card.practiceTimes));
+            // var stimHasBeenIntroduced = stim.hasBeenIntroduced;
 
-        // Store parameters in an object for easy logging/debugging
-        var p = {};
+            // Store parameters in an object for easy logging/debugging
+            var p = {};
 
-        // Top-level metrics
-        p.userTotalResponses = cardProbabilities.numQuestionsAnswered;
-        p.userCorrectResponses = cardProbabilities.numCorrectAnswers;
+            // Top-level metrics
+            p.userTotalResponses = this.cardProbabilities.numQuestionsAnswered;
+            p.userCorrectResponses = this.cardProbabilities.numCorrectAnswers;
 
-        // Card/cluster metrics
-        p.questionSuccessCount = card.questionSuccessCount;
-        p.questionFailureCount = card.questionFailureCount;
-        p.questionTotalTests = p.questionSuccessCount + p.questionFailureCount;
-        p.questionStudyTrialCount = card.studyTrialCount;
-        p.questionSecsSinceLastShown = elapsed(card.lastShownTimestamp);
-        p.questionSecsSinceFirstShown = elapsed(card.firstShownTimestamp);
-        p.questionSecsPracticingOthers = secs(card.otherPracticeTimeSinceFirst);
+            // Card/cluster metrics
+            p.questionSuccessCount = card.questionSuccessCount;
+            p.questionFailureCount = card.questionFailureCount;
+            p.questionTotalTests = p.questionSuccessCount + p.questionFailureCount;
+            p.questionStudyTrialCount = card.studyTrialCount;
+            p.questionSecsSinceLastShown = this.elapsed(card.lastShownTimestamp);
+            p.questionSecsSinceFirstShown = this.elapsed(card.firstShownTimestamp);
+            p.questionSecsPracticingOthers = this.secs(card.otherPracticeTimeSinceFirst);
 
-        // Stimulus/cluster-version metrics
-        p.stimSecsSinceLastShown = elapsed(stim.lastShownTimestamp);
-        p.stimSecsSinceFirstShown = elapsed(stim.firstShownTimestamp);
-        p.stimSecsPracticingOthers = secs(stim.otherPracticeTimeSinceFirst);
+            // Stimulus/cluster-version metrics
+            p.stimSecsSinceLastShown = this.elapsed(stim.lastShownTimestamp);
+            p.stimSecsSinceFirstShown = this.elapsed(stim.firstShownTimestamp);
+            p.stimSecsPracticingOthers = this.secs(stim.otherPracticeTimeSinceFirst);
 
-        p.stimSuccessCount = stim.stimSuccessCount;
-        p.stimFailureCount = stim.stimFailureCount;
-        p.stimResponseText = stripSpacesAndLowerCase(Answers.getDisplayAnswerText(fastGetStimAnswer(prob.cardIndex, prob.stimIndex)));
-        p.resp = cardProbabilities.responses[p.stimResponseText];
-        p.responseSuccessCount = p.resp.responseSuccessCount;
-        p.responseFailureCount = p.resp.responseFailureCount;
-        p.responseOutcomeHistory = p.resp.outcomeHistory;
-        p.responseSecsSinceLastShown = elapsed(p.resp.lastShownTimestamp);
+            p.stimSuccessCount = stim.stimSuccessCount;
+            p.stimFailureCount = stim.stimFailureCount;
+            let rawClusterIndex = this.getRawClusterIndex(prob.cardIndex);
+            p.stimResponseText = stripSpacesAndLowerCase(Answers.getDisplayAnswerText(getStimAnswer(rawClusterIndex, prob.stimIndex)));
+            p.resp = this.cardProbabilities.responses[p.stimResponseText];
+            p.responseSuccessCount = p.resp.responseSuccessCount;
+            p.responseFailureCount = p.resp.responseFailureCount;
+            p.responseOutcomeHistory = p.resp.outcomeHistory;
+            p.responseSecsSinceLastShown = this.elapsed(p.resp.lastShownTimestamp);
 
-        p.stimParameters = getStimParameterArray(prob.cardIndex,prob.stimIndex);
+            p.stimParameters = this.getStimParameterArray(prob.cardIndex,prob.stimIndex,this.contextData.currentStimName);
 
-        p.clusterPreviousCalculatedProbabilities = JSON.parse(JSON.stringify(card.previousCalculatedProbabilities));
-        p.clusterOutcomeHistory = card.outcomeHistory;
+            p.clusterPreviousCalculatedProbabilities = JSON.parse(JSON.stringify(card.previousCalculatedProbabilities));
+            p.clusterOutcomeHistory = card.outcomeHistory;
 
-        p.stimPreviousCalculatedProbabilities = JSON.parse(JSON.stringify(stim.previousCalculatedProbabilities));
-        p.stimOutcomeHistory = stim.outcomeHistory;
-        //console.log("stimOutcomeHistory: " + p.stimOutcomeHistory);
+            p.stimPreviousCalculatedProbabilities = JSON.parse(JSON.stringify(stim.previousCalculatedProbabilities));
+            p.stimOutcomeHistory = stim.outcomeHistory;
 
-        p.overallOutcomeHistory = getUserProgress().overallOutcomeHistory;
+            p.overallOutcomeHistory = getUserProgress().overallOutcomeHistory;
 
-        //console.log("p.overallOutcomeHistory: " + p.overallOutcomeHistory);
+            return probFunction(p);
+        },
 
-        return probFunction(p);
-    }
+        // Calculate current card probabilities for every card - see selectNextCard
+        // the actual card/stim (cluster/version) selection
+        calculateCardProbabilities = function() {
+            // We use a "flat" probability structure - this is faster than a loop
+            // over our nested data structure, but it also gives us more readable
+            // code when we're setting something per stimulus
+            var probs = this.cardProbabilities.probs;
+            var ptemp = [];
+            for (var i = 0; i < probs.length; ++i) {
+                // card.canUse is true if and only if it is in the clusterlist
+                // for the current unit. You could just return here if these clusters
+                // should be ignored (or do nothing if they should be included below)
+                var parms = calculateSingleProb(probs[i]);
+                probs[i].probFunctionsParameters = parms;
+                probs[i].probability = parms.probability;
+                ptemp[i]=Math.round(100*parms.probability)/100;
 
-    // Calculate current card probabilities for every card - see selectNextCard
-    // the actual card/stim (cluster/version) selection
-    calculateCardProbabilities = function() {
-        // We use a "flat" probability structure - this is faster than a loop
-        // over our nested data structure, but it also gives us more readable
-        // code when we're setting something per stimulus
-        var probs = cardProbabilities.probs;
-        var ptemp = [];
-        for (var i = 0; i < probs.length; ++i) {
-            // card.canUse is true if and only if it is in the clusterlist
-            // for the current unit. You could just return here if these clusters
-            // should be ignored (or do nothing if they should be included below)
-            var parms = calculateSingleProb(probs[i]);
-            probs[i].probFunctionsParameters = parms;
-            probs[i].probability = parms.probability;
-            ptemp[i]=Math.round(100*parms.probability)/100;
+            }
+            console.log(JSON.stringify(ptemp));
+            return this.cardProbabilities.probs;
+        },
 
-        }
-        console.log(JSON.stringify(ptemp));
-        return cardProbabilities.probs;
-    }
+        // Return index of PROB with minimum probability that was last seen at least
+        // 2 trials ago. Default to index 0 in case no probs meet this criterion
+        function findMinProbCard(cards, probs) {
+            var currentMin = 1.00001;
+            var indexToReturn = 0;
 
-    // Return index of PROB with minimum probability that was last seen at least
-    // 2 trials ago. Default to index 0 in case no probs meet this criterion
-    function findMinProbCard(cards, probs) {
-        var currentMin = 1.00001;
+            for (var i = probs.length - 1; i >= 0; --i) {
+                var prob = probs[i];
+                var card = cards[prob.cardIndex];
+
+                if (card.canUse && card.trialsSinceLastSeen > 1) {
+                    if (prob.probability <= currentMin) {   // Note that this is stim probability
+                        currentMin = prob.probability;
+                        indexToReturn = i;
+                    }
+                }
+            }
+
+            return indexToReturn;
+        },
+
+        //Return index of PROB with max probability that is under ceiling. If no
+        //card is found under ceiling then -1 is returned
+        function findMaxProbCard(cards, probs, ceiling) {
+            var currentMax = 0;
+            var indexToReturn = -1;
+
+            for (var i = probs.length - 1; i >= 0; --i) {
+                var prob = probs[i];
+                var card = cards[prob.cardIndex];
+
+                if (card.canUse && card.trialsSinceLastSeen > 1) {
+                    // Note that we are checking stim probability
+                    if (prob.probability > currentMax && prob.probability < ceiling) {
+                        currentMax = prob.probability;
+                        indexToReturn = i;
+                    }
+                }
+            }
+
+            return indexToReturn;
+        },
+
+        function findMinProbDistCard(cards,probs){
+        var currentMin = 1.00001; //Magic number to indicate greater than highest possible distance to start
         var indexToReturn = 0;
 
         for (var i = probs.length - 1; i >= 0; --i) {
             var prob = probs[i];
             var card = cards[prob.cardIndex];
+            var parameters = card.stims[prob.stimIndex].parameter;
+            var optimalProb = parameters[1];
+            if(!optimalProb){
+                //console.log("NO OPTIMAL PROB SPECIFIED IN STIM, DEFAULTING TO 0.90");
+                optimalProb = 0.90;
+            }
+            //console.log("!!!parameters: " + JSON.stringify(parameters) + ", optimalProb: " + optimalProb);
 
             if (card.canUse && card.trialsSinceLastSeen > 1) {
-                if (prob.probability <= currentMin) {   // Note that this is stim probability
-                    currentMin = prob.probability;
+                var dist = Math.abs(prob.probability - optimalProb)
+
+                //  console.log(dist)
+                // Note that we are checking stim probability
+                if (dist <= currentMin) {
+                    currentMin = dist;
                     indexToReturn = i;
                 }
             }
         }
 
         return indexToReturn;
-    }
+        },
 
-    //Return index of PROB with max probability that is under ceiling. If no
-    //card is found under ceiling then -1 is returned
-    function findMaxProbCard(cards, probs, ceiling) {
+        function findMaxProbCardThresholdCeilingPerCard(cards,probs){
+
         var currentMax = 0;
         var indexToReturn = -1;
 
         for (var i = probs.length - 1; i >= 0; --i) {
             var prob = probs[i];
             var card = cards[prob.cardIndex];
+            var parameters = card.stims[prob.stimIndex].parameter;
+
+            var thresholdCeiling = parameters[1];
+            if(!thresholdCeiling){
+            //  console.log("NO THRESHOLD CEILING SPECIFIED IN STIM, DEFAULTING TO 0.90");
+                thresholdCeiling = 0.90;
+            }
+            //console.log("!!!parameters: " + JSON.stringify(parameters) + ", thresholdCeiling: " + thresholdCeiling + ", card: " + JSON.stringify(card));
 
             if (card.canUse && card.trialsSinceLastSeen > 1) {
                 // Note that we are checking stim probability
-                if (prob.probability > currentMax && prob.probability < ceiling) {
+                if (prob.probability >= currentMax && prob.probability < thresholdCeiling) {
                     currentMax = prob.probability;
                     indexToReturn = i;
                 }
@@ -544,86 +603,37 @@ function modelUnitEngine() {
         }
 
         return indexToReturn;
-    }
+        },
 
-    function findMinProbDistCard(cards,probs){
-      var currentMin = 1.00001; //Magic number to indicate greater than highest possible distance to start
-      var indexToReturn = 0;
+        contextData: contextData,
 
-      for (var i = probs.length - 1; i >= 0; --i) {
-          var prob = probs[i];
-          var card = cards[prob.cardIndex];
-          var parameters = card.stims[prob.stimIndex].parameter;
-          var optimalProb = parameters[1];
-          if(!optimalProb){
-            //console.log("NO OPTIMAL PROB SPECIFIED IN STIM, DEFAULTING TO 0.90");
-            optimalProb = 0.90;
-          }
-          //console.log("!!!parameters: " + JSON.stringify(parameters) + ", optimalProb: " + optimalProb);
+        getCardProbs: function(){ //TODO: rename to calcAndGetCardProbs
+            return calculateCardProbabilities();
+        },
 
-          if (card.canUse && card.trialsSinceLastSeen > 1) {
-              var dist = Math.abs(prob.probability - optimalProb)
+        getCardProbabilities: function(){
+            return this.cardProbabilities;
+        },
 
-            //  console.log(dist)
-              // Note that we are checking stim probability
-              if (dist <= currentMin) {
-                  currentMin = dist;
-                  indexToReturn = i;
-              }
-          }
-      }
-
-      return indexToReturn;
-    }
-
-    function findMaxProbCardThresholdCeilingPerCard(cards,probs){
-
-      var currentMax = 0;
-      var indexToReturn = -1;
-
-      for (var i = probs.length - 1; i >= 0; --i) {
-          var prob = probs[i];
-          var card = cards[prob.cardIndex];
-          var parameters = card.stims[prob.stimIndex].parameter;
-
-          var thresholdCeiling = parameters[1];
-          if(!thresholdCeiling){
-          //  console.log("NO THRESHOLD CEILING SPECIFIED IN STIM, DEFAULTING TO 0.90");
-            thresholdCeiling = 0.90;
-          }
-          //console.log("!!!parameters: " + JSON.stringify(parameters) + ", thresholdCeiling: " + thresholdCeiling + ", card: " + JSON.stringify(card));
-
-          if (card.canUse && card.trialsSinceLastSeen > 1) {
-              // Note that we are checking stim probability
-              if (prob.probability >= currentMax && prob.probability < thresholdCeiling) {
-                  currentMax = prob.probability;
-                  indexToReturn = i;
-              }
-          }
-      }
-
-      return indexToReturn;
-    }
-
-    //Our actual implementation
-    return {
-        getCardProbs: function(){
-          return calculateCardProbabilities();
+        setCardProbabilities: function(newCardProbs){
+            console.log("cardProbabilities before set:" + this.cardProbabilities);
+            this.cardProbabilities = {};
+            console.log("cardProbabilities after set:" + this.cardProbabilities);
+            Object.assign(this.cardProbabilities,newCardProbs);
         },
 
         unitType: "model",
 
         unitMode: (function(){
-          var unitMode = _.chain(getCurrentTdfUnit())
-              .prop("learningsession").first()
-              .prop("unitMode").trim().value();
-              //getCurrentDeliveryParams().unitMode;
-          console.log("UNIT MODE: " + unitMode);
-          return unitMode;
+            var unitMode = _.chain(getTdfUnit(this.contextData.currentTdfName,this.contextData.currentUnitNumber)) //TODO: this and prob function could be assigned together somehow possibly
+                .prop("learningsession").first()
+                .prop("unitMode").trim().value();
+            console.log("UNIT MODE: " + unitMode);
+            return unitMode;
         })(),
 
         initImpl: function() {
-            initializeActRModel();
+            this.initializeActRModel();
         },
 
         selectNextCard: function() {
@@ -634,29 +644,29 @@ function modelUnitEngine() {
             var newProbIndex;
             var showOverlearningText = false;
 
-            var numItemsPracticed = cardProbabilities.numQuestionsAnswered;
-            var cards = cardProbabilities.cards;
-            var probs = cardProbabilities.probs;
+            var numItemsPracticed = this.cardProbabilities.numQuestionsAnswered;
+            var cards = this.cardProbabilities.cards;
+            var probs = this.cardProbabilities.probs;
 
             console.log("selectNextCard unitMode: " + this.unitMode);
 
             switch(this.unitMode){
-              case 'thresholdCeiling':
+                case 'thresholdCeiling':
                 newProbIndex = findMaxProbCardThresholdCeilingPerCard(cards, probs);
                 if (newProbIndex === -1) {
                     newProbIndex = findMinProbCard(cards, probs);
                 }
                 break;
-              case 'distance':
+                case 'distance':
                 newProbIndex = findMinProbDistCard(cards,probs);
                 break;
-              case 'highest':
+                case 'highest':
                 newProbIndex = findMaxProbCard(cards, probs, 1.00001); //Magic number to indicate there is no real ceiling (probs should max out at 1.0)
                 if (newProbIndex === -1) {
                     newProbIndex = findMinProbCard(cards, probs);
                 }
                 break;
-              default:
+                default:
                 newProbIndex = findMaxProbCard(cards, probs, 0.90);
                 if (newProbIndex === -1) {
                     newProbIndex = findMinProbCard(cards, probs);
@@ -679,28 +689,30 @@ function modelUnitEngine() {
             // Save the card selection
             // Note that we always take the first stimulus and it's always a drill
             this.localSessionSet("clusterIndex", cardIndex);
-            this.localSessionSet("currentQuestion", fastGetStimQuestion(cardIndex, whichStim));
+            let rawClusterIndex = this.getRawClusterIndex(cardIndex);
+            this.localSessionSet("currentQuestion", getStimQuestion(rawClusterIndex, whichStim));
             var currentQuestion = this.localSessionGet("currentQuestion");
             //If we have a dual prompt question populate the spare data field
             if(currentQuestion.indexOf("|") != -1){
 
-              var prompts = currentQuestion.split("|");
-              this.localSessionSet("currentQuestion",prompts[0]);
-              this.localSessionSet("currentQuestionPart2",prompts[1]);
-          //    console.log("two part question detected: " + prompts[0] + ",,," + prompts[1]);
+                var prompts = currentQuestion.split("|");
+                this.localSessionSet("currentQuestion",prompts[0]);
+                this.localSessionSet("currentQuestionPart2",prompts[1]);
+            //    console.log("two part question detected: " + prompts[0] + ",,," + prompts[1]);
             }else{
-          //    console.log("Q: " +prompts[0]);
-          this.localSessionSet("currentQuestionPart2",undefined);
+            //    console.log("Q: " +prompts[0]);
+            this.localSessionSet("currentQuestionPart2",undefined);
             }
 
-            this.localSessionSet("currentAnswer", fastGetStimAnswer(cardIndex, whichStim));
-            if(getCurrentDeliveryParams().studyFirst){
-              if(card.studyTrialCount == 0){
+            this.localSessionSet("currentAnswer", getStimAnswer(rawClusterIndex, whichStim));
+            let currentUnit = getTdfUnit(this.contextData.currentTdfName,this.localSessionGet("currentUnitNumber"));
+            if(getCurrentDeliveryParams(currentUnit).studyFirst){
+                if(card.studyTrialCount == 0){
                 console.log("!!! STUDY FOR FIRST TRIAL");
                 this.localSessionSet("testType",'s');
-              }else{
+                }else{
                 this.localSessionSet("testType", "d");
-              }
+                }
             }else{
                 this.localSessionSet("testType", "d");
             }
@@ -715,15 +727,16 @@ function modelUnitEngine() {
 
             stim.lastShownTimestamp = Date.now();
             if(stim.firstShownTimestamp < 1 && stim.lastTimestamp > 0) {
-              stim.firstShownTimestamp = stim.lastShownTimestamp;
+                stim.firstShownTimestamp = stim.lastShownTimestamp;
             }
 
             //Save for returning the info later (since we don't have a schedule)
-            setCurrentCardInfo(cardIndex, whichStim);
+            this.setCurrentCardInfo(cardIndex, whichStim);
 
-            var responseText = stripSpacesAndLowerCase(Answers.getDisplayAnswerText(fastGetStimCluster(cardIndex).response[whichStim]));
-            if (responseText && responseText in cardProbabilities.responses) {
-                resp = cardProbabilities.responses[responseText];
+            let rawClusterIndex = this.getRawClusterIndex(cardIndex);
+            var responseText = stripSpacesAndLowerCase(Answers.getDisplayAnswerText(getStimCluster(rawClusterIndex,this.contextData.currentStimName).response[whichStim]));
+            if (responseText && responseText in this.cardProbabilities.responses) {
+                resp = this.cardProbabilities.responses[responseText];
                 resp.lastShownTimestamp = Date.now();
             }
 
@@ -732,9 +745,9 @@ function modelUnitEngine() {
                 console.log(">>>BEGIN METRICS>>>>>>>");
 
                 console.log("Overall user stats => ",
-                    "total trials:", cardProbabilities.numQuestionsIntroduced,
-                    "total responses:", cardProbabilities.numQuestionsAnswered,
-                    "total correct responses:", cardProbabilities.numCorrectAnswers
+                    "total trials:", this.cardProbabilities.numQuestionsIntroduced,
+                    "total responses:", this.cardProbabilities.numQuestionsAnswered,
+                    "total correct responses:", this.cardProbabilities.numCorrectAnswers
                 );
 
                 // Log selections - note that the card output will also include the stim
@@ -743,21 +756,21 @@ function modelUnitEngine() {
                 console.log("Model selected stim:", displayify(card.stims[whichStim]));
 
                 // Log time stats in human-readable form
-                var secsStr = function(t) { return secs(t) + ' secs'; };
-                var elapsedStr = function(t) { return t < 1 ? 'Never Seen': secs(Date.now() - t); };
+                var secsStr = function(t) { return this.secs(t) + ' secs'; };
+                var elapsedStr = function(t) { return t < 1 ? 'Never Seen': this.secs(Date.now() - t); };
                 console.log(
                     'Card First Seen:', elapsedStr(card.firstShownTimestamp),
                     'Card Last Seen:', elapsedStr(card.lastShownTimestamp),
                     'Total time in practice:', secsStr(_.sum(card.practiceTimes)),
                     'Previous Practice Times:', displayify(_.map(card.practiceTimes, secsStr)),
-                    'Total time in other practice:', secs(card.otherPracticeTimeSinceFirst),
+                    'Total time in other practice:', this.secs(card.otherPracticeTimeSinceFirst),
                     'Stim First Seen:', elapsedStr(stim.firstShownTimestamp),
                     'Stim Last Seen:',elapsedStr(stim.lastShownTimestamp),
-                    'Stim Total time in other practice:', secs(stim.otherPracticeTimeSinceFirst)
+                    'Stim Total time in other practice:', this.secs(stim.otherPracticeTimeSinceFirst)
                 );
 
                 // Display response and current response stats
-                console.log("Response is", responseText, displayify(cardProbabilities.responses[responseText]));
+                console.log("Response is", responseText, displayify(this.cardProbabilities.responses[responseText]));
 
                 console.log("<<<END   METRICS<<<<<<<");
             }
@@ -766,41 +779,44 @@ function modelUnitEngine() {
         },
 
         findCurrentCardInfo: function() {
-            return currentCardInfo;
+            return this.currentCardInfo;
         },
 
         cardSelected: function(selectVal, resumeData) {
             // Find objects we'll be touching
             var probIndex = _.intval(selectVal);  // See selectNextCard
 
-            var prob = cardProbabilities.probs[probIndex];
+            var prob = this.cardProbabilities.probs[probIndex];
             var indexForNewCard = prob.cardIndex;
-            var cards = cardProbabilities.cards;
+            var cards = this.cardProbabilities.cards;
             var card = cards[indexForNewCard];
             var stim = card.stims[prob.stimIndex];
-            var responseText = stripSpacesAndLowerCase(Answers.getDisplayAnswerText(fastGetStimCluster(indexForNewCard).response[prob.stimIndex]));
+
+            let rawClusterIndex = this.getRawClusterIndex(indexForNewCard);
+
+            var responseText = stripSpacesAndLowerCase(Answers.getDisplayAnswerText(getStimCluster(rawClusterIndex,this.contextData.currentStimName).response[prob.stimIndex]));
             var resp = {};
-            if (responseText && responseText in cardProbabilities.responses) {
-                resp = cardProbabilities.responses[responseText];
+            if (responseText && responseText in this.cardProbabilities.responses) {
+                resp = this.cardProbabilities.responses[responseText];
             }
 
             // Update our top-level stats
-            cardProbabilities.numQuestionsIntroduced += 1;
+            this.cardProbabilities.numQuestionsIntroduced += 1;
 
             // If this is a resume, we've been given originally logged data
             // that we need to grab
             if (!!resumeData) {
                 _.extend(card, resumeData.cardModelData);
-                _.extend(currentCardInfo, resumeData.currentCardInfo);
+                _.extend(this.currentCardInfo, resumeData.currentCardInfo);
 
                 if(resumeData.responseData.responseText == responseText){
-                  resp.lastShownTimestamp = Math.max(resumeData.responseData.lastShownTimestamp,resp.lastShownTimestamp);
+                    resp.lastShownTimestamp = Math.max(resumeData.responseData.lastShownTimestamp,resp.lastShownTimestamp);
                 }
 
-                if (currentCardInfo.clusterIndex != indexForNewCard) {
-                    console.log("Resume cluster index mismatch", currentCardInfo.clusterIndex, indexForNewCard,
+                if (this.currentCardInfo.clusterIndex != indexForNewCard) {
+                    console.log("Resume cluster index mismatch", this.currentCardInfo.clusterIndex, indexForNewCard,
                         "selectVal=", selectVal,
-                        "currentCardInfo=", displayify(currentCardInfo),
+                        "currentCardInfo=", displayify(this.currentCardInfo),
                         "card=", displayify(card),
                         "prob=", displayify(prob)
                     );
@@ -829,26 +845,28 @@ function modelUnitEngine() {
 
         createQuestionLogEntry: function() {
             var idx = this.localSessionGet("clusterIndex");
-            var card = cardProbabilities.cards[idx];
-            var cluster = fastGetStimCluster(this.localSessionGet("clusterIndex"));
-            var responseText = stripSpacesAndLowerCase(Answers.getDisplayAnswerText(cluster.response[currentCardInfo.whichStim]));
+            var card = this.cardProbabilities.cards[idx];
+            let rawClusterIndex = this.getRawClusterIndex(idx);
+            var cluster = getStimCluster(rawClusterIndex,this.contextData.currentStimName);
+            var responseText = stripSpacesAndLowerCase(Answers.getDisplayAnswerText(cluster.response[this.currentCardInfo.whichStim]));
             var responseData = {
-              responseText: responseText,
-              lastShownTimestamp: Date.now()
+                responseText: responseText,
+                lastShownTimestamp: Date.now()
             };
             return {
                 'cardModelData':   _.omit(card, ["question", "answer"]),
-                'currentCardInfo': _.extend({}, currentCardInfo),
+                'currentCardInfo': _.extend({}, this.currentCardInfo),
                 'responseData': responseData,
-                'whichStim': currentCardInfo.whichStim
+                'whichStim': this.currentCardInfo.whichStim
             };
         },
 
         cardAnswered: function(wasCorrect, resumeData) {
             // Get info we need for updates and logic below
-            var cards = cardProbabilities.cards;
-            var cluster = fastGetStimCluster(this.localSessionGet("clusterIndex"));
-            var card = _.prop(cards, cluster.shufIndex);
+            var cards = this.cardProbabilities.cards;
+            let rawClusterIndex = this.getRawClusterIndex(this.localSessionGet("clusterIndex"));
+            var cluster = getStimCluster(rawClusterIndex,this.contextData.currentStimName);
+            var card = _.prop(cards, cluster.shufIndex); //TODO: get this from unmapping cluster index
 
             // Before our study trial check, capture if this is NOT a resume
             // call (and we captured the time for the last question)
@@ -861,23 +879,23 @@ function modelUnitEngine() {
                     card.practiceTimes.push(practice);
                     card.otherPracticeTimeSinceLast = 0;
                     _.each(cards, function(otherCard, index) {
-                      if(otherCard.firstShownTimestamp > 0){
+                        if(otherCard.firstShownTimestamp > 0){
                         if (index != cluster.shufIndex) {
                             otherCard.otherPracticeTimeSinceFirst += practice;
                             otherCard.otherPracticeTimeSinceLast += practice;
                             _.each(otherCard.stims, function(otherStim, index){
-                              otherStim.otherPracticeTimeSinceFirst += practice;
-                              otherStim.otherPracticeTimeSinceLast += practice;
+                                otherStim.otherPracticeTimeSinceFirst += practice;
+                                otherStim.otherPracticeTimeSinceLast += practice;
                             });
                         }else{
-                          _.each(otherCard.stims, function(otherStim, index){
-                            if(index != currentCardInfo.whichStim){
-                              otherStim.otherPracticeTimeSinceFirst += practice;
-                              otherStim.otherPracticeTimeSinceLast += practice;
+                            _.each(otherCard.stims, function(otherStim, index){
+                            if(index != this.currentCardInfo.whichStim){
+                                otherStim.otherPracticeTimeSinceFirst += practice;
+                                otherStim.otherPracticeTimeSinceLast += practice;
                             }
-                          });
+                            });
                         }
-                      }
+                        }
                     });
                 }
             }
@@ -893,9 +911,9 @@ function modelUnitEngine() {
             }
 
             // "Global" stats
-            cardProbabilities.numQuestionsAnswered += 1;
+            this.cardProbabilities.numQuestionsAnswered += 1;
             if (wasCorrect) {
-                cardProbabilities.numCorrectAnswers += 1;
+                this.cardProbabilities.numCorrectAnswers += 1;
             }
 
             // "Card-level" stats (and below - e.g. stim-level stats)
@@ -905,7 +923,7 @@ function modelUnitEngine() {
 
                 card.outcomeHistory.push(wasCorrect ? 1 : 0);
 
-                var stim = currentCardInfo.whichStim;
+                var stim = this.currentCardInfo.whichStim;
                 if (stim >= 0 && stim < card.stims.length) {
                     if (wasCorrect) card.stims[stim].stimSuccessCount += 1;
                     else            card.stims[stim].stimFailureCount += 1;
@@ -916,9 +934,9 @@ function modelUnitEngine() {
             }
 
             // "Response" stats
-            var answerText = stripSpacesAndLowerCase(Answers.getDisplayAnswerText(cluster.response[currentCardInfo.whichStim]));
-            if (answerText && answerText in cardProbabilities.responses) {
-                var resp = cardProbabilities.responses[answerText];
+            var answerText = stripSpacesAndLowerCase(Answers.getDisplayAnswerText(cluster.response[this.currentCardInfo.whichStim]));
+            if (answerText && answerText in this.cardProbabilities.responses) {
+                var resp = this.cardProbabilities.responses[answerText];
                 if (wasCorrect) resp.responseSuccessCount += 1;
                 else            resp.responseFailureCount += 1;
 
@@ -927,9 +945,9 @@ function modelUnitEngine() {
             else {
                 console.log("COULD NOT STORE RESPONSE METRICS",
                     answerText,
-                    currentCardInfo.whichStim,
+                    this.currentCardInfo.whichStim,
                     displayify(cluster.response),
-                    displayify(cardProbabilities.responses));
+                    displayify(this.cardProbabilities.responses));
             }
 
             // All stats gathered - calculate probabilities
@@ -939,7 +957,9 @@ function modelUnitEngine() {
         },
 
         unitFinished: function() {
-            var session = _.chain(getCurrentTdfUnit()).prop("learningsession").first().value();
+            let currentUnit = getTdfUnit(this.contextData.currentTdfName,this.localSessionGet("currentUnitNumber"));
+            //We use localSessionGet instead of this.contextData.currentUnitNumber because contextData doesn't change whereas the localsession entry will
+            var session = _.chain(currentUnit).prop("learningsession").first().value();
             var minSecs = _.chain(session).prop("displayminseconds").first().intval(0).value();
             var maxSecs = _.chain(session).prop("displaymaxseconds").first().intval(0).value();
 
@@ -952,14 +972,14 @@ function modelUnitEngine() {
             }
 
             // If we're still here, check practice seconds
-            var practiceSeconds = getCurrentDeliveryParams().practiceseconds;
+            var practiceSeconds = getCurrentDeliveryParams(currentUnit).practiceseconds;
             if (practiceSeconds < 1.0) {
                 //Less than a second is an error or a missing values
                 console.log("No Practice Time Found and display timer: user must quit with Continue button");
                 return false;
             }
 
-            var unitElapsedTime = (Date.now() - unitStartTimestamp) / 1000.0;
+            var unitElapsedTime = (Date.now() - this.unitStartTimestamp) / 1000.0;
             console.log("Model practice check", unitElapsedTime, ">", practiceSeconds);
             return (unitElapsedTime > practiceSeconds);
         }
@@ -969,26 +989,18 @@ function modelUnitEngine() {
 //////////////////////////////////////////////////////////////////////////////
 // Return an instance of the schedule-based unit engine
 
-function scheduleUnitEngine() {
+function scheduleUnitEngine(contextData) {
+    let schedule = {};
+
     //Return the schedule for the current unit of the current lesson -
     //If it doesn't exist, then create and store it in User Progress
     function getSchedule() {
-        //Retrieve current schedule
-        var progress = getUserProgress();
-
         var unit = getCurrentUnitNumber();
-        var schedule = null;
-        if (progress.currentSchedule && progress.currentSchedule.unitNumber == unit) {
-            schedule = progress.currentSchedule;
-        }
 
-        //Lazy create save if we don't have a correct schedule
+        //Create if we don't have a correct schedule
         if (schedule === null) {
-            console.log("CREATING SCHEDULE, showing progress");
-            console.log(progress);
-
             // TODO: set current tdf filename
-            var file = getCurrentTdfFile();
+            var file = getTdfFile(this.contextData.currentTdfName); 
             var setSpec = file.tdfs.tutor.setspec[0];
             var currUnit = file.tdfs.tutor.unit[unit];
 
@@ -1004,9 +1016,6 @@ function scheduleUnitEngine() {
                 throw new Error("There is an issue with the TDF - experiment cannot continue");
             }
 
-            //We save the current schedule and also log it to the UserTime collection
-            progress.currentSchedule = schedule;
-
             recordUserTime("schedule", {
                 unitname: _.display(currUnit.unitname),
                 unitindex: unit,
@@ -1019,6 +1028,7 @@ function scheduleUnitEngine() {
     }
 
     return {
+        contextData:contextData,
         unitType: "schedule",
 
         initImpl: function() {
@@ -1026,7 +1036,6 @@ function scheduleUnitEngine() {
         },
 
         selectNextCard: function() {
-            // currently unused: var unit = getCurrentUnitNumber();
             var questionIndex = this.localSessionGet("questionIndex");
             var questInfo = getSchedule().q[questionIndex];
             var whichStim = questInfo.whichStim;
@@ -1034,7 +1043,8 @@ function scheduleUnitEngine() {
             //Set current Q/A info, type of test (drill, test, study), and then
             //increment the session's question index number
             this.localSessionSet("clusterIndex", questInfo.clusterIndex);
-            this.localSessionSet("currentQuestion", getCurrentStimQuestion(whichStim));
+            let rawClusterIndex = this.getRawClusterIndex(questInfo.clusterIndex);
+            this.localSessionSet("currentQuestion", getStimQuestion(rawClusterIndex, whichStim));
             var currentQuestion = this.localSessionGet("currentQuestion");
             //If we have a dual prompt question populate the spare data field
             if(currentQuestion.indexOf("|") != -1){
@@ -1047,7 +1057,7 @@ function scheduleUnitEngine() {
               console.log("one part question detected");
               this.localSessionSet("currentQuestionPart2",undefined);
             }
-            this.localSessionSet("currentAnswer", getCurrentStimAnswer(whichStim));
+            this.localSessionSet("currentAnswer", getStimAnswer(rawClusterIndex, whichStim));
             this.localSessionSet("testType", questInfo.testType);
             this.localSessionSet("questionIndex", questionIndex + 1);
             this.localSessionSet("showOverlearningText", false);  //No overlearning in a schedule
@@ -1055,17 +1065,8 @@ function scheduleUnitEngine() {
             console.log("SCHEDULE UNIT card selection => ",
                 "cluster-idx-unmapped:", questInfo.clusterIndex,
                 "whichStim:", whichStim,
-                "parameter", getCurrentStimParameter(whichStim)
+                "parameter", getStimParameter(rawClusterIndex, whichParameter)
             );
-
-            Session.set("clusterIndex",             engine.localSessionGet("clusterIndex"));
-            Session.set("questionIndex",            engine.localSessionGet("questionIndex"));
-            Session.set("currentUnitNumber",        engine.localSessionGet("currentUnitNumber"));
-            Session.set("currentQuestion",          engine.localSessionGet("currentQuestion"));
-            Session.set("currentQuestionPart2",     engine.localSessionGet("currentQuestionPart2"));
-            Session.set("currentAnswer",            engine.localSessionGet("currentAnswer"));
-            Session.set("showOverlearningText",     engine.localSessionGet("showOverlearningText"));
-            Session.set("testType",                 engine.localSessionGet("testType"));
 
             return questInfo.clusterIndex;
         },
@@ -1101,9 +1102,9 @@ function scheduleUnitEngine() {
 
         unitFinished: function() {
             var questionIndex = this.localSessionGet("questionIndex");
-            var unit = getCurrentUnitNumber();
+            var unit = this.localSessionGet("currentUnitNumber");
             var schedule = null;
-            if (unit < getCurrentTdfFile().tdfs.tutor.unit.length) {
+            if (unit < getTdfFile(this.localSessionGet("currentTdfFile")).tdfs.tutor.unit.length) {
                 schedule = getSchedule();
             }
 

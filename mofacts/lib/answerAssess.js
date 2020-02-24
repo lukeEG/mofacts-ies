@@ -23,7 +23,7 @@ function answerIsBranched(answer) {
     return _.trim(answer).indexOf(';') >= 0;
 }
 
-checkIfUserAnswerMatchesOtherAnswers = function(userAnswer,correctAnswer){
+checkIfUserAnswerMatchesOtherAnswers = function(userAnswer,correctAnswer,rawClusterIndex){
   otherQuestionAnswers = getAllCurrentStimAnswers().filter(x => x !== correctAnswer);
   for(var i=0;i<otherQuestionAnswers.length;i++){
     var stimStr = otherQuestionAnswers[i];
@@ -41,7 +41,7 @@ checkIfUserAnswerMatchesOtherAnswers = function(userAnswer,correctAnswer){
   return false;
 }
 
-function simpleStringMatch(userAnswer, correctAnswer, lfparameter, fullAnswerStr) {
+function simpleStringMatch(userAnswer, correctAnswer, lfparameter, fullAnswerStr, rawClusterIndex) {
     var s1 = _.trim(userAnswer).toLowerCase();
     var s2 = _.trim(correctAnswer).toLowerCase();
     var fullAnswerText = _.trim(fullAnswerStr).toLowerCase();
@@ -55,7 +55,7 @@ function simpleStringMatch(userAnswer, correctAnswer, lfparameter, fullAnswerStr
         if (!!lfparameter) {
             //Check to see if the user answer is an exact match for any other answers in the stim file,
             //If not we'll do an edit distance calculation to determine if they were close enough to the correct answer
-            if(checkIfUserAnswerMatchesOtherAnswers(s1,fullAnswerText)){
+            if(checkIfUserAnswerMatchesOtherAnswers(s1,fullAnswerText,rawClusterIndex)){
               return 0;
             }else{
               var editDistScore = 1.0 - (
@@ -82,14 +82,14 @@ function simpleStringMatch(userAnswer, correctAnswer, lfparameter, fullAnswerStr
 // match was exact, we return 1. If we matched on edit distance, we return 2.
 // We also support a |-only regex(-ish) format (which is also honored by our
 // regex search)
-function stringMatch(stimStr, userAnswer, lfparameter) {
+function stringMatch(stimStr, userAnswer, lfparameter, rawClusterIndex) {
     if (/^[\|A-Za-z0-9 \.\%]+$/i.test(stimStr)) {
         // They have the regex matching our special condition - check it manually
         var checks = _.trim(stimStr).split('|');
         for(var i = 0; i < checks.length; ++i) {
             if (checks[i].length < 1)
                 continue;  //No blank checks
-            var matched = simpleStringMatch(userAnswer, checks[i], lfparameter, stimStr);
+            var matched = simpleStringMatch(userAnswer, checks[i], lfparameter, stimStr, rawClusterIndex);
             if (matched !== 0) {
                 return matched; //Match!
             }
@@ -97,7 +97,7 @@ function stringMatch(stimStr, userAnswer, lfparameter) {
         return 0; //Nothing found
     }
     else {
-        return simpleStringMatch(userAnswer, stimStr, lfparameter, stimStr);
+        return simpleStringMatch(userAnswer, stimStr, lfparameter, stimStr, rawClusterIndex);
     }
 }
 
@@ -108,7 +108,7 @@ function stringMatch(stimStr, userAnswer, lfparameter) {
 // the current levenshtein distance.
 // ALSO notice that we use the same return values as stringMatch: 0 for no
 // match, 1 for exact match, 2 for edit distance match
-function regExMatch(regExStr, userAnswer, lfparameter,fullAnswer) {
+function regExMatch(regExStr, userAnswer, lfparameter,fullAnswer,rawClusterIndex) {
     if (lfparameter && /^[\|A-Za-z0-9 ]+$/i.test(regExStr)) {
         // They have an edit distance parameter and the regex matching our
         // special condition - check it manually
@@ -116,7 +116,7 @@ function regExMatch(regExStr, userAnswer, lfparameter,fullAnswer) {
         for(var i = 0; i < checks.length; ++i) {
             if (checks[i].length < 1)
                 continue;  //No blank checks
-            var matched = simpleStringMatch(userAnswer, checks[i], lfparameter, fullAnswer);
+            var matched = simpleStringMatch(userAnswer, checks[i], lfparameter, fullAnswer,rawClusterIndex);
             if (matched !== 0) {
                 return matched; //Match!
             }
@@ -132,7 +132,7 @@ function regExMatch(regExStr, userAnswer, lfparameter,fullAnswer) {
 //Return [isCorrect, matchText] where isCorrect is true if the user-supplied
 //answer matches the first branch and matchText is the text response from a
 //matching branch
-function matchBranching(answer, userAnswer, lfparameter) {
+function matchBranching(answer, userAnswer, lfparameter, rawClusterIndex) {
     var isCorrect = false;
     var matchText = "";
     var userAnswerCheck = _.trim(userAnswer).toLowerCase();
@@ -144,7 +144,7 @@ function matchBranching(answer, userAnswer, lfparameter) {
             continue;
 
         flds[0] = _.trim(flds[0]).toLowerCase();
-        var matched = regExMatch(flds[0], userAnswerCheck, lfparameter,answer);
+        var matched = regExMatch(flds[0], userAnswerCheck, lfparameter,answer, rawClusterIndex);
         if (matched !== 0) {
             matchText = _.trim(flds[1]);
             if (matched === 2) {
@@ -202,12 +202,14 @@ Answers = {
 
     //Return [isCorrect, matchText] if userInput correctly matches answer -
     //taking into account both branching answers and edit distance
-    answerIsCorrect: function(userInput, answer, setspec) {
+    answerIsCorrect: function(userInput, answer, setspec,clusterIndex, rawClusterIndex) {
         //Note that a missing or invalid lfparameter will result in a null value
         var lfparameter = _.chain(setspec).prop("lfparameter").first().floatval().value();
 
+
+
         if (answerIsBranched(answer)) {
-            return matchBranching(answer, userInput, lfparameter);
+            return matchBranching(answer, userInput, lfparameter, rawClusterIndex);
         }
         else {
             var isCorrect, matchText;
@@ -218,7 +220,7 @@ Answers = {
                 dispAnswer = _.trim(dispAnswer.split("|")[0]);
             }
 
-            var match = stringMatch(answer, userInput, lfparameter);
+            var match = stringMatch(answer, userInput, lfparameter,rawClusterIndex);
 
             if (match === 0) {
                 isCorrect = false;
@@ -243,10 +245,11 @@ Answers = {
                     matchText = "The correct answer is " + dispAnswer + ".";
                 }
               else {
-                if(!getFeedbackForFalseResponse(userInput)){
-                  matchText = isCorrect ? "Correct" :  "Incorrect. The correct answer is " + dispAnswer + ".";
+                let falseReponseFeedback = getFeedbackForFalseResponse(userInput,clusterIndex);
+                if(!!falseReponseFeedback){
+                    matchText = isCorrect ? "Correct" : falseReponseFeedback;
                 } else {
-                  matchText = isCorrect ? "Correct" : getFeedbackForFalseResponse(userInput);
+                    matchText = isCorrect ? "Correct" :  "Incorrect. The correct answer is " + dispAnswer + ".";
                 }
               }
             }

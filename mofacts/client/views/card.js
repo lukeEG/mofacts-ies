@@ -103,52 +103,15 @@ function clearScrollList() {
 
 // IMPORTANT: this function assumes that the current state reflects a properly
 // set up Session for the current question/answer information
-function writeCurrentToScrollList(userAnswer, isTimeout, simCorrect, justAdded) {
+function writeCurrentToScrollList(justAdded,tdfFileName,currentUnitNumber,historyUserAnswer,historyCorrectMsg) {
     // We only store scroll history if it has been turned on in the TDF
-    var params = getCurrentDeliveryParams();
+    let currentUnit = !!tdfFileName ? getTdfUnit(tdfFileName,currentUnitNumber) : undefined;
+    var params = getCurrentDeliveryParams(currentUnit);
     if (!params.showhistory) {
         return;
     }
 
-    var isCorrect = null;
-    var historyUserAnswer = "";
-    var historyCorrectMsg = "";
-
-    var correctAndText;
-
-    var setspec = null;
-    if (!getButtonTrial()) {
-        setspec = getCurrentTdfFile().tdfs.tutor.setspec[0];
-    }
-
     var trueAnswer = Answers.getDisplayAnswerText(Session.get("currentAnswer"));
-
-    if (getTestType() === "s") {
-        //Study trial
-        isCorrect = true;
-        historyUserAnswer = "You answered " + _.trim(userAnswer) + ".";
-        historyCorrectMsg = trueAnswer;
-    }
-    else if (!!isTimeout) {
-        //Timeout
-        correctAndText = Answers.answerIsCorrect("", Session.get("currentAnswer"), setspec);
-        isCorrect = false;
-        historyUserAnswer = "You didn't answer in time.";
-        historyCorrectMsg = correctAndText[1];
-    }
-    else if (typeof simCorrect === "boolean") {
-        //Simulation! We know what they did
-        isCorrect = simCorrect;
-        historyUserAnswer = "Simulated answer where correct==" + simCorrect;
-        historyCorrectMsg = Answers.getDisplayAnswerText(Session.get("currentAnswer"));
-    }
-    else {
-        //"Regular" answers
-        correctAndText = Answers.answerIsCorrect(userAnswer, Session.get("currentAnswer"), setspec);
-        isCorrect = correctAndText[0];
-        historyUserAnswer = "You answered " + _.trim(userAnswer) + ".";
-        historyCorrectMsg = correctAndText[1];
-    }
 
     var currCount = _.intval(Session.get("scrollListCount"));
 
@@ -900,7 +863,6 @@ function newQuestionHandler() {
         Session.set("buttonTrial", true);
         $("#textEntryRow").hide();
 
-        var cluster = getStimCluster(getCurrentClusterIndex());
         var currentQuest = engine.findCurrentCardInfo();
 
         var buttonChoices = [];
@@ -1129,10 +1091,6 @@ function handleUserInput(e, source, simAnswerCorrect) {
         ).join(',');
     }
 
-    //Note that we need to log from data in the cluster returned from
-    //getStimCluster so that we honor cluster mapping
-    var currCluster = getStimCluster(getCurrentClusterIndex());
-
     //Figure out the review latency we should log
     var reviewLatency = 0;
     if (getTestType() === "d" && !isCorrect) {
@@ -1146,8 +1104,8 @@ function handleUserInput(e, source, simAnswerCorrect) {
   // var forceCorrectFeedback = getTestType() === "m" || getTestType() === "n";
     var answerLogRecord = {
         'questionIndex': _.intval(Session.get("questionIndex"), -1),
-        'index': _.intval(currCluster.clusterIndex, -1),
-        'shufIndex': _.intval(currCluster.shufIndex, -1),
+        'index': _.intval(getOriginalCurrentClusterIndex(), -1),
+        'shufIndex': _.intval(getCurrentClusterIndex(), -1),
         'ttype': _.trim(getTestType()),
         'qtype':  _.trim(findQTypeSimpified()),
         'guiSource':  _.trim(source),
@@ -1205,7 +1163,7 @@ function handleUserInput(e, source, simAnswerCorrect) {
     //record progress in userProgress variable storage (note that this is
     //helpful and used on the stats page, but the user times log is the
     //"system of record"
-    recordProgress(Session.get("currentQuestion"), Session.get("currentAnswer"), userAnswer, isCorrect);
+    recordProgress(Session.get("currentQuestion"), Session.get("currentAnswer"), userAnswer, isCorrect,getCurrentClusterIndex());
 
     //Figure out timeout and reviewLatency
     var deliveryParams = getCurrentDeliveryParams();
@@ -1267,9 +1225,10 @@ function handleUserInput(e, source, simAnswerCorrect) {
     }
 }
 
-function getButtonTrial() {
+function getButtonTrial(currentUnit) {
+    let tdfUnit = !!currentUnit ? currentUnit : getCurrentTdfUnit();
     //Default to value given in the unit
-    var isButtonTrial = "true" === _.chain(getCurrentTdfUnit())
+    var isButtonTrial = "true" === _.chain(tdfUnit)
         .prop("buttontrial").first()
         .trim().value().toLowerCase();
 
@@ -1292,55 +1251,80 @@ function getButtonTrial() {
     return isButtonTrial;
 }
 
+function evaluateAnswer(userAnswer,isTimeout,isStudy,simCorrect,tdfFileName,currentAnswer,currentClusterIndex,rawClusterIndex){
+  let isCorrect = undefined;
+  let msg = "";
+  let historyUserAnswer = "";
+  let historyCorrectMsg = "";
+
+  let setspec = null;
+  if (!getButtonTrial()) {
+      setspec = getTdfFile(tdfFileName).tdfs.tutor.setspec[0];
+  }
+
+  // How was their answer? (And note we only need to update historyUserAnswer
+  // if it's not a "standard" )
+  if (isTimeout) {
+    //Timeout - doesn't matter what the answer says!
+    correctAndText = Answers.answerIsCorrect("", currentAnswer, setspec,currentClusterIndex, rawClusterIndex)
+    isCorrect = false;
+    msg = "Time expired. " + correctAndText[1];
+    historyUserAnswer = "You didn't answer in time.";
+    historyCorrectMsg = correctAndText[1];
+  }
+  else if (isStudy) {
+      //We've already marked this as a correct answer
+      historyUserAnswer = "You answered " + _.trim(userAnswer) + ".";
+      historyCorrectMsg = Answers.getDisplayAnswerText(currentAnswer); //trueAnswer
+      msg = "Please study the answer";
+  }
+  else if (typeof simCorrect === "boolean") {
+      //Simulation! We know what they did
+      isCorrect = simCorrect;
+      msg = "Simulation";
+      historyUserAnswer = "Simulated answer where correct==" + simCorrect;
+      historyCorrectMsg = Answers.getDisplayAnswerText(currentAnswer);
+  }
+  else {
+      correctAndText = Answers.answerIsCorrect(userAnswer, currentAnswer, setspec, currentClusterIndex, rawClusterIndex);
+      isCorrect = correctAndText[0];
+      msg = correctAndText[1];
+      historyUserAnswer = "You answered " + _.trim(userAnswer) + ".";
+      historyCorrectMsg = correctAndText[1];
+  }
+
+  return {isCorrect,msg,historyUserAnswer,historyCorrectMsg};
+}
+
 //Take care of user feedback - and return whether or not the user correctly
 //answered the question. simCorrect will usually be undefined/null BUT if
 //it is true or false we know this is part of a simulation call
 function userAnswerFeedback(userAnswer, isTimeout, simCorrect) {
-    var isCorrect = null;
+    let isCorrect = null;
+    let isStudy = getTestType() === "s";
     //Nothing to evaluate for a study - just pretend they answered correctly
-    if (getTestType() === "s") {
+    if (isStudy) {
         isCorrect = true;
         isTimeout = false;
     }
 
     //Helpers for correctness logic below
-  var isDrill = (getTestType() === "d" || getTestType() === "m" || getTestType() === "n");
-    var handleAnswerState = function(goodNews, msg) {
-        isCorrect = goodNews;
-        if (isDrill) {
-            showUserInteraction(goodNews, msg);
-        }
-    };
+    let isDrill = (getTestType() === "d" || getTestType() === "m" || getTestType() === "n");
+    let msg = "";
+    let historyUserAnswer = "";
+    let historyCorrectMsg = "";   
+    let currentClusterIndex = Session.get("clusterIndex");
 
-    var correctAndText;
+    let answerFeedback = evaluateAnswer(userAnswer,isTimeout,isStudy,simCorrect,tdfFileName,currentClusterIndex);
+    var {isCorrect,msg,historyUserAnswer,historyCorrectMsg} = answerFeedback;
 
-    var setspec = null;
-    if (!getButtonTrial()) {
-        setspec = getCurrentTdfFile().tdfs.tutor.setspec[0];
+    if (isDrill) {
+      showUserInteraction(isCorrect, msg);
     }
 
-    // How was their answer? (And note we only need to update historyUserAnswer
-    // if it's not a "standard" )
-    if (!!isTimeout) {
-        //Timeout - doesn't matter what the answer says!
-        correctAndText = Answers.answerIsCorrect("", Session.get("currentAnswer"), setspec);
-        handleAnswerState(false, "Time expired. " + correctAndText[1]);
-    }
-    else if (isCorrect) {
-        //We've already marked this as a correct answer
-        handleAnswerState(true, "Please study the answer");
-    }
-    else if (typeof simCorrect === "boolean") {
-        //Simulation! We know what they did
-        handleAnswerState(simCorrect, "Simulation");
-    }
-    else {
-        correctAndText = Answers.answerIsCorrect(userAnswer, Session.get("currentAnswer"), setspec);
-        handleAnswerState(correctAndText[0], correctAndText[1]);
-    }
-
+    let justAdded = 1; //we're evaluating current user input so we have just added = 1
     //Make sure to record what they just did (and set justAdded)
-    writeCurrentToScrollList(userAnswer, isTimeout, simCorrect, 1);
+    writeCurrentToScrollList(justAdded,Session.get("currentTdfName"),Session.get("currentUnitNumber"),historyUserAnswer,historyCorrectMsg);
 
     //Give unit engine a chance to update any necessary stats
     engine.cardAnswered(isCorrect);
@@ -1416,7 +1400,7 @@ function unitIsFinished(reason) {
     });
 }
 
-function recordProgress(question, answer, userAnswer, isCorrect) {
+function recordProgress(question, answer, userAnswer, isCorrect,curUnit,curClusterIndex) {
     var uid = Meteor.userId();
     if (!uid) {
         console.log("NO USER ID!!!");
@@ -1435,7 +1419,7 @@ function recordProgress(question, answer, userAnswer, isCorrect) {
 
     var prog = getUserProgress();
     prog.progressDataArray.push({
-        clusterIndex: getCurrentClusterIndex(),
+        clusterIndex: curClusterIndex,
         questionIndex: questionIndex,
         question: question,
         answer: answer,
@@ -1451,7 +1435,7 @@ function recordProgress(question, answer, userAnswer, isCorrect) {
 
     // Note that we track the score in the user progress object, but we
     // copy it to the Session object for template updates
-    scoring = getCurrentScoreValues();  // in format [correct, incorrect]
+    scoring = getCurrentScoreValues(curUnit);  // in format [correct, incorrect]
 
     var oldScore = _.intval(prog.currentScore);
     var newScore = oldScore + (isCorrect ? scoring[0] : -scoring[1]);
@@ -1734,7 +1718,7 @@ processLINEAR16 = function(data){
       }
     }else{
       userAnswer.value = "waiting for transcription";
-      phraseHints = getAllCurrentStimAnswers(true);
+      phraseHints = getAllCurrentStimAnswers(true, getOriginalCurrentClusterIndex());
     }
 
     var request = generateRequestJSON(sampleRate,speechRecognitionLanguage,phraseHints,data);
@@ -1746,7 +1730,7 @@ processLINEAR16 = function(data){
       //We call getAllCurrentStimAnswers again but not excluding phrase hints that
       //may confuse the speech api so that we can check if what the api returns
       //is within the realm of reasonable responses before transcribing it
-      answerGrammar = getAllCurrentStimAnswers(false);
+      answerGrammar = getAllCurrentStimAnswers(false,getOriginalCurrentClusterIndex());
     }
 
     var tdfSpeechAPIKey = getCurrentTdfFile().tdfs.tutor.setspec[0].speechAPIKey;
@@ -2107,17 +2091,13 @@ function allowUserInput(textFocus) {
 ////////////////////////////////////////////////////////////////////////////
 // BEGIN Resume Logic
 
-getTdfFromKeyFileName = function(keyFileName) {
-  return Tdfs.findOne({fileName: keyFileName});
-}
-
 replaceUnderscoreInTdfName = function(tdfNameWithUnderscore) {
   return tdfNameWithUnderscore.replace(/_([^_]*)$/, '.' + '$1');
 }
 
 // Return concatenated list of user times logs with current stimulus
-getUserTimesLogsAndEngines = function() {
-  var userLog = UserTimesLog.findOne({ _id: Meteor.userId() });
+getUserTimesLogsAndEngines = function(userID) {
+  var userLog = UserTimesLog.findOne({ _id: userID });
   var keys = Object.keys(userLog);
   var enginesToGet = {};
   var userLogsWithCurrentStim = [];
@@ -2125,24 +2105,30 @@ getUserTimesLogsAndEngines = function() {
   keys.forEach(function(key) {
     // Skip ID object
     if (key.includes("xml")) {
+      let engineName = replaceUnderscoreInTdfName(key);
       if (userLog[key][0].stimulusfile == Session.get("currentStimName")) {
         userLogsWithCurrentStim.push(userLog[key].map(function(entry) {
-          entry.key = replaceUnderscoreInTdfName(key);
+          entry.key = engineName;
           return entry;
         }));
 
-        enginesToGet[replaceUnderscoreInTdfName(key)] = createEmptyUnit();
+        enginesToGet[engineName] = createEmptyUnit();
+
+        //Initialize some variables for after the processUserTimesLogs loop
+        let tdfFile = getTdfFile(key);
+        let needFirstUnitInstructions = tdfFileWeSelected.tdfs.tutor.unit && tdfFile.tdfs.tutor.unit.length;
+        enginesToGet[engineName].localSessionSet("needFirstUnitInstructions",needFirstUnitInstructions);
+        enginesToGet[engineName].localSessionSet("moduleCompleted",false);
       }
     }
   });
 
-  var userTimesLogs = [].concat(...userLogsWithCurrentStim);
-  userTimesLogs.sort(function(a, b) {
+  userLogsWithCurrentStim.sort(function(a, b) {
     return a.serverSideTimeStamp < b.serverSideTimeStamp;
   });
 
   return {
-    logs: userTimesLogs,
+    logs: userLogsWithCurrentStim, //TODO: make sure this returns correctly
     engines: enginesToGet
   };
 }
@@ -2395,10 +2381,6 @@ function resumeFromUserTimesLog() {
     //Go ahead and save the cluster mapping we found/created
     Session.set("clusterMapping", clusterMapping);
 
-    // We'll need this cached so we can pull it out after going through the map/remap process
-    // when we're carrying over probabilities
-    Session.set("cachedMapping", clusterMapping);
-
     //Notice that no matter what, we log something about condition data
     //ALSO NOTICE that we'll be calling processUserTimesLog after the server
     //returns and we know we've logged what happened
@@ -2429,10 +2411,6 @@ unitHasOption = function(unitIdx, optionName, fileName) {
 //We process the user times log, assuming resumeFromUserTimesLog has properly
 //set up the TDF/Stim session variables
 processUserTimesLog = function(expKey) {
-    //Get TDF info
-    var file = getCurrentTdfFile();
-    var tutor = file.tdfs.tutor;
-    var currentStimName = getCurrentStimName();
 
     //Before the below options, reset current test data
     initUserProgress({
@@ -2460,33 +2438,25 @@ processUserTimesLog = function(expKey) {
     Session.set("currentUnitNumber", 0);
     Session.set("currentUnitStartTime", Date.now());
 
-    //We'll be tracking the last question so that we can match with the answer
-    var lastQuestionEntry = null;
-
     //prepareCard will handle whether or not new units see instructions, but
     //it will miss instructions for the very first unit.
-    var needFirstUnitInstructions = tutor.unit && tutor.unit.length;
 
-
-
-    //It's possible that they clicked Continue on a final unit, so we need to
-    //know to act as if we're done
-    var moduleCompleted = false;
+    let tdfFileWeSelected = getCurrentTdfFile();
 
     //Reset current engine
-    var resetEngine = function(currUnit, currEngine) {
+    var resetEngine = function(currUnit, currEngine, contextData) {
         var tempEngine = {}; 
 
-        if (unitHasOption(currUnit, "assessmentsession")) {
-            tempEngine = createScheduleUnit();
+        if (unitHasOption(currUnit, "assessmentsession",contextData.currentTdfName)) {
+            tempEngine = createScheduleUnit(contextData);
             tempEngine.localSessionSet("sessionType","assessmentsession");
         }
-        else if (unitHasOption(currUnit, "learningsession")) {
-            tempEngine = createModelUnit();
+        else if (unitHasOption(currUnit, "learningsession",contextData.currentTdfName)) {
+            tempEngine = createModelUnit(contextData);
             tempEngine.localSessionSet("sessionType","learningsession");
         }
         else {
-            tempEngine = createEmptyUnit();
+            tempEngine = createEmptyUnit(contextData);
             tempEngine.localSessionSet("sessionType","empty");
         }
 
@@ -2508,27 +2478,16 @@ processUserTimesLog = function(expKey) {
 
     // Returns an array of objects, each containing an array of userTimesLogs and their corresponding engine
     // Each action has a 'key' value that is the key value for its engine
-    var utLogEngines = getUserTimesLogsAndEngines();
+    var utLogEngines = getUserTimesLogsAndEngines(Meteor.userId());
     engines = utLogEngines.engines;
-    
-    // We'll track the previous engine so we can pull its probabilities, map to raw cluster index,
-    // and then remap it back to the current engine (to maintain card/prob state across engines)
-    let previousEngine = {};
-    let cardProbs = {};
-    let userProgress = {};
+
+    //Make sure to save the cluster mapping in case we just generated it and it doesn't yet exist in userTimesLog
+    let curEngineKey = replaceUnderscoreInTdfName(getCurrentTdfFile());
+    engines[curEngineKey].localSessionSet("clusterMapping",Session.get("clusterMapping"));
 
     //At this point, our state is set as if they just started this learning
     //session for the first time. We need to loop thru the user times log
     //entries and update that state
-
-    let calculateNewCardProbs = function(cardProbs, currEngine) {
-      let rawCardProbs = {};
-
-      // Iterate over cardProbs.card/probs and get raw cluster index
-      // Remap those indices to match currEngine's and then calculate probs
-
-      return rawCardProbs;
-    }
 
     _.each(utLogEngines.logs, function(entry, index, currentList) {
         // IMPORTANT: this won't really work since we're in a tight loop. If we really
@@ -2543,14 +2502,11 @@ processUserTimesLog = function(expKey) {
         // $('#resumeMsg').text(progress + "% Complete");
         // $('.progress-bar').css('width', progress+'%').attr('aria-valuenow', progress);
 
-        // Calculate new card probabilities using previous engine's state, 
-        // and then cache the results in cardProbs
-        if (!!previousEngine && previousEngine.key != entry.key) {
-            if (previousEngine.unitType === "model" && !!previousEngine.getCardProbs()) {
-              Object.assign(cardProbs, cardProbabilities);
-              
-              console.log("cardProbs: ", cardProbs);
-            }
+        // Transfer over context between engines
+        if (curEngineKey != entry.key) {
+            let lastEngineCardProbs = engines[curEngineKey].getCardProbabilities();
+            engines[entry.key].setCardProbabilities(lastEngineCardProbs);
+            curEngineKey = entry.key;
         }
 
         if (!entry.action) {
@@ -2569,17 +2525,31 @@ processUserTimesLog = function(expKey) {
           Session.set("currentTdfName", entry.tdffilename);
         }
 
+        else if(action === "cluster-mapping"){
+          engines[entry.key].localSessionSet("clusterMapping",entry.clusterMapping);
+        }
+
         else if (action === "instructions") {            
             //They've been shown instructions for this unit
-            needFirstUnitInstructions = false;
+            engines[entry.key].localSessionSet("needFirstUnitInstructions",false);
             var instructUnit = entry.currentUnit;
             if (!!instructUnit || instructUnit === 0) {
-                clearScrollList();
+                if(curEngineKey == entry.key){
+                  clearScrollList();
+                }
 
-                resetEngine(instructUnit, engines[entry.key]);
+                let tdfFileName = entry.key;
+                let tdfFile = getTdfFile(tdfFileName);
+
+                let contextData = {
+                  currentStimName: tdfFile.tdfs.tutor.setSpec[0].stimulusfile,
+                  currentTdfName: tdfFileName,
+                  currentUnitNumber: instructUnit
+                };
+
+                resetEngine(instructUnit, engines[entry.key],contextData);
 
                 engines[entry.key].localSessionSet("currentUnitNumber", instructUnit);
-                console.log('cuu2: ', instructUnit);
                 engines[entry.key].localSessionSet("questionIndex", 0);
                 engines[entry.key].localSessionSet("clusterIndex", undefined);
                 engines[entry.key].localSessionSet("currentQuestion", undefined);
@@ -2591,7 +2561,7 @@ processUserTimesLog = function(expKey) {
         }
         
         else if (action === "unit-end") {
-            file = getTdfFromKeyFileName(entry.key);
+            file = getTdfFile(entry.key);
             //Logged completion of unit - if this is the final unit we also
             //know that the TDF is completed
             var finishedUnit = _.intval(entry.currentUnit, -1);
@@ -2599,19 +2569,24 @@ processUserTimesLog = function(expKey) {
             console.log('cuu2: ', instructUnit);
             if (finishedUnit >= 0 && checkUnit === finishedUnit) {
                 //Correctly matches current unit - reset
-                needFirstUnitInstructions = false;
-                lastQuestionEntry = null;
+                engines[entry.key].localSessionSet("needFirstUnitInstructions",false);
+                engines[entry.key].localSessionSet("lastQuestionEntry",null);
 
-                clearScrollList();
+                if(curEngineKey == entry.key){
+                  clearScrollList();
+                }
 
                 if (finishedUnit === file.tdfs.tutor.unit.length - 1) {
-                    //Completed
-                    moduleCompleted = true;
+                    engines[entry.key].localSessionSet("moduleCompleted",true);
                 }
                 else {
                     //Moving to next unit
                     checkUnit += 1;
-                    resetEngine(checkUnit, engines[entry.key]);
+                    let contextData = {
+                      currentTdfName: entry.key,
+                      currentUnitNumber: checkUnit
+                    }
+                    resetEngine(checkUnit, engines[entry.key],contextData);
                     engines[entry.key].localSessionSet("currentUnitNumber", checkUnit);
                 }
 
@@ -2632,8 +2607,8 @@ processUserTimesLog = function(expKey) {
         else if (action === "schedule") {
             file = getTdfFromKeyFileName(entry.key);
             //Read in the previously created schedule
-            lastQuestionEntry = null; //Kills the last question
-            needFirstUnitInstructions = false;
+            engines[entry.key].localSessionSet("lastQuestionEntry",null); //Kills the last question
+            engines[entry.key].localSessionSet("needFirstUnitInstructions",false);
 
             var unit = entry.unitindex;
             if (!unit && unit !== 0) {
@@ -2672,13 +2647,15 @@ processUserTimesLog = function(expKey) {
             engines[entry.key].localSessionSet("currentAnswer", undefined);
             engines[entry.key].localSessionSet("testType", undefined);
             engines[entry.key].localSessionSet("currentTdfName", entry.key);
-            clearScrollList();
+            if(curEngineKey == entry.key){
+              clearScrollList();
+            }
         }
 
         else if (action === "question") {
           //Read in previously asked question
-          lastQuestionEntry = entry; //Always save the last question
-          needFirstUnitInstructions = false;
+          engines[entry.key].localSessionSet("lastQuestionEntry",entry); //Always save the last question
+          engines[entry.key].localSessionSet("needFirstUnitInstructions",false);
 
           if (!entry.selType) {
               console.log("Ignoring user times entry question with no selType", entry);
@@ -2713,43 +2690,54 @@ processUserTimesLog = function(expKey) {
 
         else if (action === "answer" || action === "[timeout]") {
             //Read in the previously recorded answer (even if it was a timeout)
-            needCurrentInstruction = false; //Answer means they got past the instructions
-            needFirstUnitInstructions = false;
-            if (lastQuestionEntry === null) {
+            engines[entry.key].localSessionSet("needFirstUnitInstructions",false);
+            if (engines[entry.key].localSessionGet("lastQuestionEntry") === null) {
                 console.log("Ignore answer for no question", entry);
                 return;
             }
+            let wasCorrect = false;
+            let isTimeout = action === "[timeout]";
 
-            //Did they get it right or wrong?
-            var wasCorrect;
-            if (action === "answer") {
+            if (!isTimeout) {
                 wasCorrect = typeof entry.isCorrect !== "undefined" ? entry.isCorrect : null;
                 if (wasCorrect === null) {
                     console.log("Missing isCorrect on an answer - assuming false", entry);
                     wasCorrect = false;
                 }
             }
-            else {
-                wasCorrect = false; //timeout is never correct
-            }
 
             //Test type is always recorded with an answer, so we just reset it
             var testType = entry.ttype;
             engines[entry.key].localSessionSet("testType", testType);
+            
+            let engineTdfFileName = engines[entry.key].localSessionGet("currentTdfName");
+            let currentUnitNumber = engines[entry.key].localSessionGet("currentUnitNumber");
+            let curUnit = getTdfUnit(engineTdfFileName,currentUnitNumber);
+
+            let userAnswer = entry.answer;
+            let currentAnswer = engines[entry.key].localSessionGet("currentAnswer");
 
             //The session variables should be set up correctly from the question
             recordProgress(
               engines[entry.key].localSessionGet("currentQuestion"),
-              engines[entry.key].localSessionGet("currentAnswer"),
-                entry.answer,
-                wasCorrect
+              currentAnswer,
+              userAnswer,
+              wasCorrect,
+              curUnit,
+              engines[entry.key].localSessionGet("clusterIndex")
             );
 
-            var simCorrect = null;
-            if (_.chain(entry).prop("wasSim").intval() > 0) {
-                simCorrect = wasCorrect;
+            if(curEngineKey == entry.key){
+              let isStudy = engines[entry.key].localSessionGet("testType") === "s";
+              let simCorrect = _.chain(entry).prop("wasSim").intval() > 0 ? wasCorrect : null;
+              let curClusterIndex = engines[entry.key].localSessionGet("clusterIndex");
+              let rawClusterIndex = engines[entry.key].getRawClusterIndex(curClusterIndex);
+
+              let answerFeedback = evaluateAnswer(userAnswer,isTimeout,isStudy,simCorrect,engineTdfFileName,currentAnswer,curClusterIndex, rawClusterIndex);
+              var {historyUserAnswer,historyCorrectMsg} = answerFeedback;
+              let justAdded = 0; //we didn't just add, we're processing old entries = 0
+              writeCurrentToScrollList(justAdded, engineTdfFileName,currentUnitNumber,historyUserAnswer,historyCorrectMsg);
             }
-            writeCurrentToScrollList(entry.answer, action === "[timeout]", simCorrect, 0);
 
             //Notify unit engine about card answer
             // Since answers don't track current unit, we get the unit from previous log entry which *should* be a question
@@ -2757,7 +2745,7 @@ processUserTimesLog = function(expKey) {
             engines[entry.key].cardAnswered(wasCorrect, entry);
 
             //We know the last question no longer applies
-            lastQuestionEntry = null;
+            engines[entry.key].localSessionSet("lastQuestionEntry",null);
         }
 
         else {
@@ -2774,53 +2762,52 @@ processUserTimesLog = function(expKey) {
             }
         }
 
-        let propsToSetGlobal = [
-          "clusterIndex",
-          "questionIndex",
-          "currentUnitNumber",
-          "currentQuestion",
-          "currentQuestionPart2",
-          "currentAnswer",
-          "showOverlearningText",
-          "testType",
-          "currentTdfName",
-        ]
+        // let propsToSetGlobal = [
+        //   "clusterIndex",
+        //   "questionIndex",
+        //   "currentUnitNumber",
+        //   "currentQuestion",
+        //   "currentQuestionPart2",
+        //   "currentAnswer",
+        //   "showOverlearningText",
+        //   "testType",
+        //   "currentTdfName",
+        // ]
 
-        _.each(propsToSetGlobal, function(prop) {
-          if (!!engines[entry.key]) {
-            Session.set(prop, engines[entry.key].localSessionGet(prop));
-          }
-        });
+        // _.each(propsToSetGlobal, function(prop) {
+        //   if (!!engines[entry.key]) {
+        //     Session.set(prop, engines[entry.key].localSessionGet(prop));
+        //   }
+        // });
     });
 
-    if (!!engine) {
-      // Init engine (if model engine) with cardProbs object
-
-      Session.set("clusterIndex",             engine.localSessionGet("clusterIndex"));
-      Session.set("questionIndex",            engine.localSessionGet("questionIndex"));
-      Session.set("currentUnitNumber",        engine.localSessionGet("currentUnitNumber"));
-      Session.set("currentQuestion",          engine.localSessionGet("currentQuestion"));
-      Session.set("currentQuestionPart2",     engine.localSessionGet("currentQuestionPart2"));
-      Session.set("currentAnswer",            engine.localSessionGet("currentAnswer"));
-      Session.set("showOverlearningText",     engine.localSessionGet("showOverlearningText"));
-      Session.set("testType",                 engine.localSessionGet("testType"));
-      Session.set("currentTdfName",           engine.localSessionGet("currentTdfName"));
-    }
+    //After we process all the logs, restore the context for the current tdf only
+    engine = null;
+    Object.assign(engine,engines[curEngineKey]);
+    Session.set("clusterIndex",             engine.localSessionGet("clusterIndex"));
+    Session.set("questionIndex",            engine.localSessionGet("questionIndex"));
+    Session.set("currentUnitNumber",        engine.localSessionGet("currentUnitNumber"));
+    Session.set("currentQuestion",          engine.localSessionGet("currentQuestion"));
+    Session.set("currentQuestionPart2",     engine.localSessionGet("currentQuestionPart2"));
+    Session.set("currentAnswer",            engine.localSessionGet("currentAnswer"));
+    Session.set("showOverlearningText",     engine.localSessionGet("showOverlearningText"));
+    Session.set("testType",                 engine.localSessionGet("testType"));
+    Session.set("currentTdfName",           engine.localSessionGet("currentTdfName"));
 
     //If we make it here, then we know we won't need a resume until something
     //else happens
     Session.set("needResume", false);
-    if (needFirstUnitInstructions) {
+    if (engine.localSessionGet("needFirstUnitInstructions")) {
         //They haven't seen our first instruction yet
         console.log("RESUME FINISHED: displaying initial instructions");
         leavePage("/instructions");
     }
-    else if (!!lastQuestionEntry) {
+    else if (!!engine.localSessionGet("lastQuestionEntry")) {
         //Question outstanding: force question display and let them give an answer
         console.log("RESUME FINISHED: displaying current question");
         newQuestionHandler();
     }
-    else if (moduleCompleted) {
+    else if (engine.localSessionGet("moduleCompleted")) {
         //They are DONE!
         console.log("TDF already completed - leaving for profile page.");
         if (Session.get("loginMode") === "experiment") {
@@ -2833,10 +2820,12 @@ processUserTimesLog = function(expKey) {
         }
     }
     else {
+        //TODO: this could probably be moved to unitFinished and then flow through from prepareCard()
+
         // If we get this far and the unit engine thinks the unit is finished,
         // we might need to stick with the instructions *IF AND ONLY IF* the
         // lockout period hasn't finished (which prepareCard won't handle)
-        if (engine.unitFinished()) {
+        if (engine.unitFinished()) { //TODO: look at whether we need to swithc over these session variables and 
             var lockoutMins = _.chain(getCurrentDeliveryParams()).prop("lockoutminutes").intval().value();
             if (lockoutMins > 0) {
                 var unitStartTimestamp = _.intval(Session.get("currentUnitStartTime"));

@@ -905,7 +905,6 @@ processUserTimesLogStudentReporting = function(tempEngine,userTimesLogs) {
 
         else if (action === "answer" || action === "[timeout]") {
             //Read in the previously recorded answer (even if it was a timeout)
-            needCurrentInstruction = false; //Answer means they got past the instructions
             needFirstUnitInstructions = false;
             if (lastQuestionEntry === null) {
                 console.log("Ignore answer for no question", entry);

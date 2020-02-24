@@ -12,8 +12,8 @@ getCurrentFontSize = function () {
 };
 
 //Return [correctscore, incorrectscore] for our current unit.
-getCurrentScoreValues = function () {
-    var parms = getCurrentDeliveryParams();
+getCurrentScoreValues = function (curUnit) {
+    var parms = getCurrentDeliveryParams(curUnit);
     return [
         _.intval(parms.correctscore),
         _.intval(parms.incorrectscore)
@@ -45,35 +45,14 @@ getStimClusterCount = function() {
 // current sessions cluster mapping. Note that they are allowed to give us
 // a cached stimuli document for optimization
 
-//Note that the cluster mapping goes from current session index to raw index in order of the stim file
-getStimCluster = function (index, cachedStimuli) {
-    var clusterMapping = Session.get("clusterMapping");
-    var mappedIndex;
-
-    if(clusterMapping) {
-        //Generic, normal functioning - use the previously defined mapping
-        mappedIndex = clusterMapping[index];
-    }
-    else {
-        //This is tricky - we may actually be called before everything is set
-        //up for rendering. As a result, we just return the first cluster
-        console.log("No cluster mapping available for stimulus clusters");
-        mappedIndex = 0;
-    }
-
-    if (!cachedStimuli) {
-        cachedStimuli = Stimuli.findOne({fileName: getCurrentStimName()});
-    }
+//Note this uses raw cluster index (i.e. the index from the actual stimuli file)
+getStimCluster = function (index, stimFileName) {
+    let cachedStimuli = Stimuli.findOne({fileName: stimFileName});
     var cluster = cachedStimuli
         .stimuli
         .setspec
         .clusters[0]
-        .cluster[mappedIndex];
-
-    //When we log, we want to be able to record the origin index as shufIndex
-    //and the mapped index as clusterIndex
-    cluster.shufIndex = index;
-    cluster.clusterIndex = mappedIndex;
+        .cluster[index];
 
     return cluster;
 };
@@ -122,8 +101,7 @@ getAllStimQuestions = function(){
   return allQuestions;
 }
 
-getAllCurrentStimAnswers = function(removeExcludedPhraseHints) {
-  var currentClusterIndex = getOriginalCurrentClusterIndex();
+getAllCurrentStimAnswers = function(removeExcludedPhraseHints,rawClusterIndex) {
 
   var clusters = Stimuli.findOne({fileName: getCurrentStimName()}).stimuli.setspec.clusters[0].cluster
   var allAnswers = new Set;
@@ -131,7 +109,7 @@ getAllCurrentStimAnswers = function(removeExcludedPhraseHints) {
 
   for(clusterIndex in clusters){
     //Grab the response phrases we want to exclude if this is the current cluster
-    if(clusterIndex == currentClusterIndex){
+    if(clusterIndex == rawClusterIndex){
       if(!!clusters[clusterIndex].speechHintExclusionList){
           exclusionList = exclusionList.concat(("" + clusters[clusterIndex].speechHintExclusionList).split(','));
       }
@@ -163,11 +141,9 @@ getQuestionType = function () {
     var type = "text"; //Default type
 
     //If we get called too soon, we just use the first cluster
-    var clusterIndex = getCurrentClusterIndex();
-    if (!clusterIndex && clusterIndex !== 0)
-        clusterIndex = 0;
+    var rawClusterIndex = getOriginalCurrentClusterIndex() || 0;
 
-    var cluster = getStimCluster(clusterIndex);
+    var cluster = getStimCluster(rawClusterIndex, Session.get("currentStimName"));
     if (cluster.displayType && cluster.displayType.length) {
         type = cluster.displayType[0];
     }
@@ -179,11 +155,9 @@ getResponseType = function () {
   var type = "text"; //Default type
 
   //If we get called too soon, we just use the first cluster
-  var clusterIndex = getCurrentClusterIndex();
-  if (!clusterIndex && clusterIndex !== 0)
-      clusterIndex = 0;
+  var rawClusterIndex = getOriginalCurrentClusterIndex() || 0;
 
-  var cluster = getStimCluster(clusterIndex);
+  var cluster = getStimCluster(rawClusterIndex,Session.get("currentStimName"));
   if (cluster.responseType && cluster.responseType.length) {
       type = cluster.responseType[0];
   }
@@ -210,40 +184,29 @@ getTestType = function () {
 
 //get the question at this index - note that the cluster index will be mapped
 //in getStimCluster
-getStimQuestion = function (index, whichQuestion) {
-    return getStimCluster(index).display[whichQuestion];
+getStimQuestion = function (index, whichQuestion,stimFileName) {
+    return getStimCluster(index,stimFileName).display[whichQuestion];
 };
 
 //get the answer at this index - note that the cluster index will be mapped
 //in getStimCluster
-getStimAnswer = function (index, whichAnswer) {
-    return getStimCluster(index).response[whichAnswer];
+getStimAnswer = function (index, whichAnswer, stimFileName) {
+    return getStimCluster(index,stimFileName).response[whichAnswer];
 };
 
 //get the parameter at this index - this works using the same semantics as
 //getStimAnswer and getStimQuestion above. Note that we default to return 0
-getStimParameter = function (index, whichParameter) {
-    return _.chain(getStimCluster(index))
+getStimParameter = function (index, whichParameter, stimFileName) {
+    return _.chain(getStimCluster(index, stimFileName))
         .prop("parameter")
         .prop(_.intval(whichParameter))
         .floatval()
         .value();
 };
 
-//Simplified Q/A getters
-getCurrentStimQuestion = function(whichQuestion) {
-    return getStimQuestion(getCurrentClusterIndex(), whichQuestion);
-};
-getCurrentStimAnswer = function(whichAnswer) {
-    return getStimAnswer(getCurrentClusterIndex(), whichAnswer);
-};
-getCurrentStimParameter = function(whichParameter) {
-    return getStimParameter(getCurrentClusterIndex(), whichParameter);
-};
-
 //Return the list of false responses corresponding to the current question/answer
-getCurrentFalseResponses = function(whichAnswer) {
-  var cluster = getStimCluster(getCurrentClusterIndex());
+getCurrentFalseResponses = function(whichAnswer,rawClusterIndex, stimFileName) {
+  var cluster = getStimCluster(rawClusterIndex, stimFileName);
 
     if (!cluster || !cluster.falseResponse || cluster.falseResponse.length < 1) {
         return []; //No false responses
@@ -265,8 +228,8 @@ getCurrentFalseResponses = function(whichAnswer) {
   }
 };
 
-getFeedbackForFalseResponse = function(whichAnswer) {
-  var cluster = getStimCluster(getCurrentClusterIndex());
+getFeedbackForFalseResponse = function(whichAnswer,rawClusterIndex, stimFileName) {
+  var cluster = getStimCluster(rawClusterIndex, stimFileName);
   if(!cluster.falseResponse){
     return null;
   }
@@ -283,11 +246,6 @@ getCurrentStimName = function () {
 };
 
 getCurrentUnitNumber = function () {
-    if (Session.get("currentUnitNumber") === undefined) {
-      console.log("zzz: ", Session.get("currentUnitNumber"));
-    } else {
-      console.log("zzz: ", Session.get("currentUnitNumber"));
-    }
     return Session.get("currentUnitNumber");
 };
 
@@ -298,6 +256,24 @@ getCurrentTdfName = function () {
 getCurrentTdfFile = function () {
     return Tdfs.findOne({fileName: getCurrentTdfName()});
 };
+
+getTdfFile = function(tdfFileName){
+  return Tdfs.findOne({fileName: tdfFileName});
+}
+
+getTdfUnit = function(tdfFileName,currentUnitNumber){
+  let thisTdf = getTdfFile(tdfFileName);
+  if(!thisTdf){
+    return null;
+  }
+
+  let currUnit = null;
+  if (typeof thisTdf.tdfs.tutor.unit !== "undefined") {
+      currUnit = thisTdf.tdfs.tutor.unit[currentUnitNumber];
+  }
+
+  return currUnit || null;
+}
 
 //Note that unit number used can be overridden - otherwise we just use the
 //currentUnitNumber
