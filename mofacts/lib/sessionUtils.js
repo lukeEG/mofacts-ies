@@ -53,9 +53,6 @@
 //client... but maybe we should?
 sessionCleanUp = function() {
     console.log("session cleanup!!!");
-
-    engine = null;
-    engines = null;
     Session.set("audioEnabled",undefined);
     Session.set("audioInputSensitivity",undefined);
     Session.set("audioPromptFeedbackView",undefined);

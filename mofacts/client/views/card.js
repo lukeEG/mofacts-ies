@@ -83,6 +83,7 @@ turn it on, you need to set <showhistory>true</showhistory> in the
 // Global variables and helper functions for them
 
 engine = null; //The unit engine for display (i.e. model or schedule)
+engines = null;
 var buttonList = new Mongo.Collection(null); //local-only - no database
 var scrollList = new Mongo.Collection(null); //local-only - no database
 Session.set("scrollListCount", 0);
@@ -2118,7 +2119,7 @@ replaceUnderscoreInTdfName = function(tdfNameWithUnderscore) {
 getUserTimesLogsAndEngines = function() {
   var userLog = UserTimesLog.findOne({ _id: Meteor.userId() });
   var keys = Object.keys(userLog);
-  var engines = {};
+  var enginesToGet = {};
   var userLogsWithCurrentStim = [];
 
   keys.forEach(function(key) {
@@ -2130,7 +2131,7 @@ getUserTimesLogsAndEngines = function() {
           return entry;
         }));
 
-        engines[replaceUnderscoreInTdfName(key)] = createEmptyUnit();
+        enginesToGet[replaceUnderscoreInTdfName(key)] = createEmptyUnit();
       }
     }
   });
@@ -2142,7 +2143,7 @@ getUserTimesLogsAndEngines = function() {
 
   return {
     logs: userTimesLogs,
-    engines: engines
+    engines: enginesToGet
   };
 }
 
@@ -2440,6 +2441,21 @@ processUserTimesLog = function(expKey) {
         currentSchedule: {}
     });
 
+    if (!!engine) {
+      console.log("current tdf name: " + Session.get("currentTdfName"));
+      console.log("engine local tdf name" + engine.localSessionGet("currentTdfName"));
+    }
+
+    if (!!engine && engine.localSessionGet("currentTdfName") != Session.get("currentTdfName")) {
+      console.log(JSON.stringify(engine));
+      engine = null;
+      console.log(JSON.stringify(engine));
+  
+      console.log(JSON.stringify(engines));
+      engines = null;
+      console.log(JSON.stringify(engines));  
+    }
+
     //Default to first unit
     Session.set("currentUnitNumber", 0);
     Session.set("currentUnitStartTime", Date.now());
@@ -2475,6 +2491,7 @@ processUserTimesLog = function(expKey) {
         }
 
         tempEngine.localSessionSet("currentUnitNumber", currUnit);
+        console.log("cuu1: ", currUnit);
 
         Object.assign(currEngine, tempEngine);
 
@@ -2496,14 +2513,22 @@ processUserTimesLog = function(expKey) {
     
     // We'll track the previous engine so we can pull its probabilities, map to raw cluster index,
     // and then remap it back to the current engine (to maintain card/prob state across engines)
-    var previousEngine = {};
-    var trackedCurrentUnit = null;
-
-    var cardProbs = {};
+    let previousEngine = {};
+    let cardProbs = {};
+    let userProgress = {};
 
     //At this point, our state is set as if they just started this learning
     //session for the first time. We need to loop thru the user times log
     //entries and update that state
+
+    let calculateNewCardProbs = function(cardProbs, currEngine) {
+      let rawCardProbs = {};
+
+      // Iterate over cardProbs.card/probs and get raw cluster index
+      // Remap those indices to match currEngine's and then calculate probs
+
+      return rawCardProbs;
+    }
 
     _.each(utLogEngines.logs, function(entry, index, currentList) {
         // IMPORTANT: this won't really work since we're in a tight loop. If we really
@@ -2518,6 +2543,16 @@ processUserTimesLog = function(expKey) {
         // $('#resumeMsg').text(progress + "% Complete");
         // $('.progress-bar').css('width', progress+'%').attr('aria-valuenow', progress);
 
+        // Calculate new card probabilities using previous engine's state, 
+        // and then cache the results in cardProbs
+        if (!!previousEngine && previousEngine.key != entry.key) {
+            if (previousEngine.unitType === "model" && !!previousEngine.getCardProbs()) {
+              Object.assign(cardProbs, cardProbabilities);
+              
+              console.log("cardProbs: ", cardProbs);
+            }
+        }
+
         if (!entry.action) {
             console.log("Ignoring user times entry with no action");
             return;
@@ -2530,9 +2565,11 @@ processUserTimesLog = function(expKey) {
         //currently only be set to false in the default/fall-thru else block
         var recordTimestamp = true;
 
-        if (action === "instructions") {
-            previousEngine = engines[entry.key];
-            
+        if (action === "profile tdf selection") {
+          Session.set("currentTdfName", entry.tdffilename);
+        }
+
+        else if (action === "instructions") {            
             //They've been shown instructions for this unit
             needFirstUnitInstructions = false;
             var instructUnit = entry.currentUnit;
@@ -2542,6 +2579,7 @@ processUserTimesLog = function(expKey) {
                 resetEngine(instructUnit, engines[entry.key]);
 
                 engines[entry.key].localSessionSet("currentUnitNumber", instructUnit);
+                console.log('cuu2: ', instructUnit);
                 engines[entry.key].localSessionSet("questionIndex", 0);
                 engines[entry.key].localSessionSet("clusterIndex", undefined);
                 engines[entry.key].localSessionSet("currentQuestion", undefined);
@@ -2553,12 +2591,12 @@ processUserTimesLog = function(expKey) {
         }
         
         else if (action === "unit-end") {
-            previousEngine = engines[entry.key];
             file = getTdfFromKeyFileName(entry.key);
             //Logged completion of unit - if this is the final unit we also
             //know that the TDF is completed
             var finishedUnit = _.intval(entry.currentUnit, -1);
             var checkUnit = _.intval(engines[entry.key].localSessionSet("currentUnitNumber"), -2);
+            console.log('cuu2: ', instructUnit);
             if (finishedUnit >= 0 && checkUnit === finishedUnit) {
                 //Correctly matches current unit - reset
                 needFirstUnitInstructions = false;
@@ -2638,7 +2676,6 @@ processUserTimesLog = function(expKey) {
         }
 
         else if (action === "question") {
-          previousEngine = engines[entry.key];
           //Read in previously asked question
           lastQuestionEntry = entry; //Always save the last question
           needFirstUnitInstructions = false;
@@ -2675,8 +2712,6 @@ processUserTimesLog = function(expKey) {
         }
 
         else if (action === "answer" || action === "[timeout]") {
-            previousEngine = engines[entry.key];
-          
             //Read in the previously recorded answer (even if it was a timeout)
             needCurrentInstruction = false; //Answer means they got past the instructions
             needFirstUnitInstructions = false;
@@ -2733,14 +2768,34 @@ processUserTimesLog = function(expKey) {
         if (recordTimestamp && entry.clientSideTimeStamp) {
             Session.set("lastTimestamp", entry.clientSideTimeStamp);
 
-            if (engine.localSessionGet("currentUnitNumber") > startTimeMinUnit) {
+            if (!!engine && engine.localSessionGet("currentUnitNumber") > startTimeMinUnit) {
                 Session.set("currentUnitStartTime", Session.get("lastTimestamp"));
                 startTimeMinUnit = engine.localSessionGet("currentUnitNumber");
             }
         }
+
+        let propsToSetGlobal = [
+          "clusterIndex",
+          "questionIndex",
+          "currentUnitNumber",
+          "currentQuestion",
+          "currentQuestionPart2",
+          "currentAnswer",
+          "showOverlearningText",
+          "testType",
+          "currentTdfName",
+        ]
+
+        _.each(propsToSetGlobal, function(prop) {
+          if (!!engines[entry.key]) {
+            Session.set(prop, engines[entry.key].localSessionGet(prop));
+          }
+        });
     });
 
     if (!!engine) {
+      // Init engine (if model engine) with cardProbs object
+
       Session.set("clusterIndex",             engine.localSessionGet("clusterIndex"));
       Session.set("questionIndex",            engine.localSessionGet("questionIndex"));
       Session.set("currentUnitNumber",        engine.localSessionGet("currentUnitNumber"));

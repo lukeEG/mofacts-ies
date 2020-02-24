@@ -132,7 +132,6 @@ function defaultUnitEngine() {
 
         localSessionSet(property, value) {
             this.localSession[property] = value;
-            Session.set(property, value);
         },
 
         localSessionGet(property) {

@@ -283,6 +283,11 @@ getCurrentStimName = function () {
 };
 
 getCurrentUnitNumber = function () {
+    if (Session.get("currentUnitNumber") === undefined) {
+      console.log("zzz: ", Session.get("currentUnitNumber"));
+    } else {
+      console.log("zzz: ", Session.get("currentUnitNumber"));
+    }
     return Session.get("currentUnitNumber");
 };
 
