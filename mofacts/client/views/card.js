@@ -84,6 +84,7 @@ turn it on, you need to set <showhistory>true</showhistory> in the
 
 engine = null; //The unit engine for display (i.e. model or schedule)
 engines = null;
+externalEngineSessionData = null;
 var buttonList = new Mongo.Collection(null); //local-only - no database
 var scrollList = new Mongo.Collection(null); //local-only - no database
 Session.set("scrollListCount", 0);
@@ -103,7 +104,7 @@ function clearScrollList() {
 
 // IMPORTANT: this function assumes that the current state reflects a properly
 // set up Session for the current question/answer information
-function writeCurrentToScrollList(justAdded,tdfFileName,currentUnitNumber,historyUserAnswer,historyCorrectMsg) {
+function writeCurrentToScrollList(justAdded,tdfFileName,currentUnitNumber,historyUserAnswer,historyCorrectMsg,currentAnswer,currentQuestion) {
     // We only store scroll history if it has been turned on in the TDF
     let currentUnit = !!tdfFileName ? getTdfUnit(tdfFileName,currentUnitNumber) : undefined;
     var params = getCurrentDeliveryParams(currentUnit);
@@ -111,7 +112,7 @@ function writeCurrentToScrollList(justAdded,tdfFileName,currentUnitNumber,histor
         return;
     }
 
-    var trueAnswer = Answers.getDisplayAnswerText(Session.get("currentAnswer"));
+    var trueAnswer = Answers.getDisplayAnswerText(currentAnswer);
 
     var currCount = _.intval(Session.get("scrollListCount"));
 
@@ -122,7 +123,7 @@ function writeCurrentToScrollList(justAdded,tdfFileName,currentUnitNumber,histor
         'userAnswer': historyUserAnswer,
         'answer': trueAnswer,
         'shownToUser': historyCorrectMsg,
-        'question': Session.get("currentQuestion"),
+        'question': currentQuestion,
         'userCorrect': isCorrect
     }, function(err, newId) {
         if (!!err) {
@@ -527,7 +528,7 @@ Template.card.helpers({
     },
 
     'currentProgress': function() {
-        return Session.get("questionIndex");
+        return engine.localSessionGet("questionIndex");
     },
 
     'textCard': function() {
@@ -797,6 +798,7 @@ cardStart = function(){
 
       console.log("cards template rendered => Performing resume");
       Session.set("showOverlearningText", false);
+      engine.localSessionSet("showOverlearningText",false);
 
       Session.set("needResume", false); //Turn this off to keep from re-resuming
       resumeFromUserTimesLog();
@@ -812,7 +814,7 @@ function newQuestionHandler() {
 
     var textFocus = false; //We'll set to true if needed
 
-    var unitNumber = getCurrentUnitNumber();
+    var unitNumber = Session.get("currentUnitNumber");
     var file = getCurrentTdfFile();
     var currUnit = file.tdfs.tutor.unit[unitNumber];
 
@@ -1103,9 +1105,9 @@ function handleUserInput(e, source, simAnswerCorrect) {
   var answerLogAction = isTimeout ? "[timeout]" : "answer";
   // var forceCorrectFeedback = getTestType() === "m" || getTestType() === "n";
     var answerLogRecord = {
-        'questionIndex': _.intval(Session.get("questionIndex"), -1),
+        'questionIndex': _.intval(engine.localSessionGet("questionIndex"), -1),
         'index': _.intval(getOriginalCurrentClusterIndex(), -1),
-        'shufIndex': _.intval(getCurrentClusterIndex(), -1),
+        'shufIndex': _.intval(Session.get("clusterIndex"), -1),
         'ttype': _.trim(getTestType()),
         'qtype':  _.trim(findQTypeSimpified()),
         'guiSource':  _.trim(source),
@@ -1163,12 +1165,11 @@ function handleUserInput(e, source, simAnswerCorrect) {
     //record progress in userProgress variable storage (note that this is
     //helpful and used on the stats page, but the user times log is the
     //"system of record"
-    recordProgress(Session.get("currentQuestion"), Session.get("currentAnswer"), userAnswer, isCorrect,getCurrentClusterIndex());
+    recordProgress(Session.get("currentQuestion"), Session.get("currentAnswer"), userAnswer, isCorrect,Session.get("clusterIndex"),engine.localSessionGet("questionIndex"),Session.get("testType"));
 
     //Figure out timeout and reviewLatency
     var deliveryParams = getCurrentDeliveryParams();
     var timeout = 0;
-    var file = getCurrentTdfFile();
 
     if (getTestType() === "s") {
         //Just a study - note that the purestudy timeout is used for the QUESTION
@@ -1207,7 +1208,7 @@ function handleUserInput(e, source, simAnswerCorrect) {
 
     //Create the action we're about to call
     var resetAfterTimeout = function() {
-        beginMainCardTimeout(timeout, function() {
+        beginMainCardTimeout(timeout, function() { //change to partial application with .bind
             writeAnswerLog();
             prepareCard();
             $("#userAnswer").val("");
@@ -1324,7 +1325,7 @@ function userAnswerFeedback(userAnswer, isTimeout, simCorrect) {
 
     let justAdded = 1; //we're evaluating current user input so we have just added = 1
     //Make sure to record what they just did (and set justAdded)
-    writeCurrentToScrollList(justAdded,Session.get("currentTdfName"),Session.get("currentUnitNumber"),historyUserAnswer,historyCorrectMsg);
+    writeCurrentToScrollList(justAdded,Session.get("currentTdfName"),Session.get("currentUnitNumber"),historyUserAnswer,historyCorrectMsg,Session.get("currentAnswer"),Session.get("currentQuestion"));
 
     //Give unit engine a chance to update any necessary stats
     engine.cardAnswered(isCorrect);
@@ -1342,10 +1343,10 @@ function userAnswerFeedback(userAnswer, isTimeout, simCorrect) {
 }
 
 function prepareCard() {
-    if (Session.get("questionIndex") === undefined) {
+    if (engine.localSessionGet("questionIndex") === undefined) {
         // At this point, a missing question index is assumed to mean "start
         // with the first question"
-        Session.set("questionIndex", 0);
+        engine.localSessionSet("questionIndex", 0);
     }
 
     if (engine.unitFinished()) {
@@ -1372,12 +1373,13 @@ function unitIsFinished(reason) {
     clearCardTimeout();
 
     var file = getCurrentTdfFile();
-    var unit = getCurrentUnitNumber();
+    var unit = Session.get("currentUnitNumber");
 
-    Session.set("questionIndex", 0);
-    Session.set("clusterIndex", undefined);
+    engine.localSessionSet("questionIndex", 0);
+    engine.localSessionSet("clusterIndex", undefined);
     var newUnit = unit + 1;
-    Session.set("currentUnitNumber", newUnit);
+    engine.localSessionSet("currentUnitNumber", newUnit);
+    Session.set("currentUnitNumber",newUnit);
     Session.set("currentUnitStartTime", Date.now());
 
     var leaveTarget;
@@ -1400,14 +1402,13 @@ function unitIsFinished(reason) {
     });
 }
 
-function recordProgress(question, answer, userAnswer, isCorrect,curUnit,curClusterIndex) {
+function recordProgress(question, answer, userAnswer, isCorrect,curUnit,curClusterIndex,questionIndex,testType) {
     var uid = Meteor.userId();
     if (!uid) {
         console.log("NO USER ID!!!");
         return;
     }
-
-    var questionIndex = Session.get("questionIndex");
+    
     if (!questionIndex && questionIndex !== 0) {
         questionIndex = null;
     }
@@ -1429,7 +1430,7 @@ function recordProgress(question, answer, userAnswer, isCorrect,curUnit,curClust
 
     //This is called from processUserTimesLog() so this both works in memory and restoring from userTimesLog
     //Ignore instruction type questions for overallOutcomeHistory
-    if(Session.get("testType") != "i"){
+    if(testType != "i"){
       prog.overallOutcomeHistory.push(isCorrect ? 1 : 0);
     }
 
@@ -1494,7 +1495,7 @@ function startQuestionTimeout(textFocus) {
   var beginQuestionAndInitiateUserInput = function(){
     console.log("beginQuestionAndInitiateUserInput");
 
-    var startMainCardTimeout = function(){
+    var startMainCardTimeout = function(){ //TODO: change to partial application with .bind
       console.log("start main card timeout");
       beginMainCardTimeout(delayMs, function() {
         console.log("stopping input after " + delayMs + " ms");
@@ -1536,21 +1537,20 @@ function startQuestionTimeout(textFocus) {
   var curQuestionTemp = engine.localSessionGet("currentQuestion");
   var prestimulusDisplay = getCurrentTdfFile().tdfs.tutor.setspec[0].prestimulusDisplay;
   Session.set("currentQuestion",prestimulusDisplay);
-
+  
   console.log("delaying for " + timeuntilstimulus + " ms then starting question");
   setTimeout(function(){
     Session.set("currentQuestion",curQuestionTemp);
     console.log("past timeuntilstimulus, start question logic");
 
     //Handle two part questions
-    var currentQuestionPart2 = Session.get("currentQuestionPart2");
+    var currentQuestionPart2 = engine.localSessionGet("currentQuestionPart2");
     if(!!currentQuestionPart2){
       var initialviewTimeDelay = deliveryParams.initialview;
       console.log("two part question detected, delaying for " + initialviewTimeDelay + " ms then continuing with question");
       setTimeout(function(){
         console.log("after timeout");
         Session.set("currentQuestion",currentQuestionPart2);
-        Session.set("currentQuestionPart2",undefined);
         redoCardImage();
         beginQuestionAndInitiateUserInput();
       },initialviewTimeDelay);
@@ -1708,6 +1708,8 @@ processLINEAR16 = function(data){
       speechRecognitionLanguage = speechRecognitionLanguage[0];
     }
 
+    let currentStimName = Session.get("currentStimName");
+
     var phraseHints = [];
     if(getButtonTrial()){
       var curChar = 'a';
@@ -1718,7 +1720,7 @@ processLINEAR16 = function(data){
       }
     }else{
       userAnswer.value = "waiting for transcription";
-      phraseHints = getAllCurrentStimAnswers(true, getOriginalCurrentClusterIndex());
+      phraseHints = getAllCurrentStimAnswers(true, getOriginalCurrentClusterIndex(),currentStimName);
     }
 
     var request = generateRequestJSON(sampleRate,speechRecognitionLanguage,phraseHints,data);
@@ -1730,7 +1732,7 @@ processLINEAR16 = function(data){
       //We call getAllCurrentStimAnswers again but not excluding phrase hints that
       //may confuse the speech api so that we can check if what the api returns
       //is within the realm of reasonable responses before transcribing it
-      answerGrammar = getAllCurrentStimAnswers(false,getOriginalCurrentClusterIndex());
+      answerGrammar = getAllCurrentStimAnswers(false,getOriginalCurrentClusterIndex(),currentStimName);
     }
 
     var tdfSpeechAPIKey = getCurrentTdfFile().tdfs.tutor.setspec[0].speechAPIKey;
@@ -2106,8 +2108,9 @@ getUserTimesLogsAndEngines = function(userID) {
     // Skip ID object
     if (key.includes("xml")) {
       let engineName = replaceUnderscoreInTdfName(key);
+      externalEngineSessionData[engineName] = { currentUnit: 0 };
       if (userLog[key][0].stimulusfile == Session.get("currentStimName")) {
-        userLogsWithCurrentStim.push(userLog[key].map(function(entry) {
+        userLogsWithCurrentStim.concat(userLog[key].map(function(entry) { //TODO: changed from push to concat, is that right?
           entry.key = engineName;
           return entry;
         }));
@@ -2197,7 +2200,6 @@ function resumeFromUserTimesLog() {
     //Clear any previous session data about unit/question/answer
     Session.set("clusterMapping", undefined);
     Session.set("currentUnitNumber", undefined);
-    Session.set("questionIndex", undefined);
     Session.set("clusterIndex", undefined);
     Session.set("currentQuestion", undefined);
     Session.set("currentQuestionPart2", undefined);
@@ -2292,11 +2294,14 @@ function resumeFromUserTimesLog() {
       console.log("Non image type detected");
     }
 
+    let currentStimName = Session.get("currentStimName");
+    let stimClusterCount = getStimClusterCount(currentStimName);
+
     //Add some session data to the log message we're sending
     conditionData = _.extend(conditionData, {
         currentRootTdfName: Session.get("currentRootTdfName"),
         currentTdfName: Session.get("currentTdfName"),
-        currentStimName: Session.get("currentStimName")
+        currentStimName: currentStimName
     });
 
     //Now we can create our record for the server - note that we use an array
@@ -2354,7 +2359,7 @@ function resumeFromUserTimesLog() {
 
         while(shuffles.length > 0 || swaps.length > 0) {
             clusterMapping = createStimClusterMapping(
-                getStimClusterCount(),
+                stimClusterCount,
                 shuffles.shift() || "",
                 swaps.shift() || "",
                 clusterMapping
@@ -2373,8 +2378,8 @@ function resumeFromUserTimesLog() {
         console.log("Cluster mapping found", clusterMapping);
     }
 
-    if (!clusterMapping || !clusterMapping.length || clusterMapping.length !== getStimClusterCount()) {
-        console.log("Invalid cluster mapping", getStimClusterCount(), clusterMapping);
+    if (!clusterMapping || !clusterMapping.length || clusterMapping.length !== stimClusterCount) {
+        console.log("Invalid cluster mapping", stimClusterCount, clusterMapping);
         throw "The cluster mapping is invalid - can not continue";
     }
 
@@ -2419,29 +2424,15 @@ processUserTimesLog = function(expKey) {
         currentSchedule: {}
     });
 
-    if (!!engine) {
-      console.log("current tdf name: " + Session.get("currentTdfName"));
-      console.log("engine local tdf name" + engine.localSessionGet("currentTdfName"));
-    }
-
-    if (!!engine && engine.localSessionGet("currentTdfName") != Session.get("currentTdfName")) {
-      console.log(JSON.stringify(engine));
-      engine = null;
-      console.log(JSON.stringify(engine));
-  
-      console.log(JSON.stringify(engines));
-      engines = null;
-      console.log(JSON.stringify(engines));  
-    }
+    //Reset our global engine state in case we switched tdfs on profile
+    engine = null;
+    engines = null;
 
     //Default to first unit
-    Session.set("currentUnitNumber", 0);
     Session.set("currentUnitStartTime", Date.now());
 
     //prepareCard will handle whether or not new units see instructions, but
     //it will miss instructions for the very first unit.
-
-    let tdfFileWeSelected = getCurrentTdfFile();
 
     //Reset current engine
     var resetEngine = function(currUnit, currEngine, contextData) {
@@ -2483,6 +2474,7 @@ processUserTimesLog = function(expKey) {
 
     //Make sure to save the cluster mapping in case we just generated it and it doesn't yet exist in userTimesLog
     let curEngineKey = replaceUnderscoreInTdfName(getCurrentTdfFile());
+    let lastEngineKey = curEngineKey
     engines[curEngineKey].localSessionSet("clusterMapping",Session.get("clusterMapping"));
 
     //At this point, our state is set as if they just started this learning
@@ -2503,10 +2495,10 @@ processUserTimesLog = function(expKey) {
         // $('.progress-bar').css('width', progress+'%').attr('aria-valuenow', progress);
 
         // Transfer over context between engines
-        if (curEngineKey != entry.key) {
-            let lastEngineCardProbs = engines[curEngineKey].getCardProbabilities();
+        if (lastEngineKey != entry.key) {
+            let lastEngineCardProbs = engines[lastEngineKey].getCardProbabilities();
             engines[entry.key].setCardProbabilities(lastEngineCardProbs);
-            curEngineKey = entry.key;
+            lastEngineKey = entry.key;
         }
 
         if (!entry.action) {
@@ -2522,7 +2514,41 @@ processUserTimesLog = function(expKey) {
         var recordTimestamp = true;
 
         if (action === "profile tdf selection") {
-          Session.set("currentTdfName", entry.tdffilename);
+          var setspec = getTdfFile(entry.tdffilename).tdfs.tutor.setspec[0];
+          var needExpCondition = (setspec.condition && setspec.condition.length);
+
+          engines[entry.key].localSessionSet("currentTdfName",entry.tdffilename);
+          engines[entry.key].localSessionSet("currentStimName", setspec[0].stimulusfile[0]);
+
+          //We must always check for experiment condition
+          if (needExpCondition) {
+              var prevCondition = _.find(utLogEngines.logs[entry.key], function(entry) {
+                  return entry && entry.action && entry.action === "expcondition";
+              });
+
+              var subTdf = null;
+
+              if (prevCondition) {
+                  subTdf = prevCondition.selectedTdf;
+              }
+              else {
+                  subTdf = _.sample(setspec.condition);
+              }
+
+              if (!subTdf) {
+                  console.log("No experimental condition could be selected!");
+                  alert("Unfortunately, something is broken in the user data and this lesson cannot continue");
+                  leavePage("/profile");
+                  return;
+              }
+
+              //Now we have a different current TDF (but root stays the same)
+              engines[entry.key].localSessionSet("currentTdfName",subTdf);
+
+              //Also need to read new stimulus file (and note that we allow an exception
+              //to kill us if the current tdf is broken and has no stimulus file)
+              engines[entry.key].localSessionSet("currentStimName", getTdfFile(subTdf).tdfs.tutor.setspec[0].stimulusfile[0]);
+          }
         }
 
         else if(action === "cluster-mapping"){
@@ -2549,7 +2575,6 @@ processUserTimesLog = function(expKey) {
 
                 resetEngine(instructUnit, engines[entry.key],contextData);
 
-                engines[entry.key].localSessionSet("currentUnitNumber", instructUnit);
                 engines[entry.key].localSessionSet("questionIndex", 0);
                 engines[entry.key].localSessionSet("clusterIndex", undefined);
                 engines[entry.key].localSessionSet("currentQuestion", undefined);
@@ -2565,7 +2590,7 @@ processUserTimesLog = function(expKey) {
             //Logged completion of unit - if this is the final unit we also
             //know that the TDF is completed
             var finishedUnit = _.intval(entry.currentUnit, -1);
-            var checkUnit = _.intval(engines[entry.key].localSessionSet("currentUnitNumber"), -2);
+            var checkUnit = _.intval(engines[entry.key].localSessionGet("currentUnitNumber"), -2);
             console.log('cuu2: ', instructUnit);
             if (finishedUnit >= 0 && checkUnit === finishedUnit) {
                 //Correctly matches current unit - reset
@@ -2587,7 +2612,6 @@ processUserTimesLog = function(expKey) {
                       currentUnitNumber: checkUnit
                     }
                     resetEngine(checkUnit, engines[entry.key],contextData);
-                    engines[entry.key].localSessionSet("currentUnitNumber", checkUnit);
                 }
 
                 engines[entry.key].localSessionSet("questionIndex", 0);
@@ -2617,7 +2641,6 @@ processUserTimesLog = function(expKey) {
                 return;
             }
 
-            var setSpec = file.tdfs.tutor.setspec[0];
             var currUnit = file.tdfs.tutor.unit[unit];
             var schedule = entry.schedule;
 
@@ -2715,16 +2738,19 @@ processUserTimesLog = function(expKey) {
             let curUnit = getTdfUnit(engineTdfFileName,currentUnitNumber);
 
             let userAnswer = entry.answer;
+            let currentQuestion = engines[entry.key].localSessionGet("currentQuestion");
             let currentAnswer = engines[entry.key].localSessionGet("currentAnswer");
 
             //The session variables should be set up correctly from the question
             recordProgress(
-              engines[entry.key].localSessionGet("currentQuestion"),
+              currentQuestion,
               currentAnswer,
               userAnswer,
               wasCorrect,
               curUnit,
-              engines[entry.key].localSessionGet("clusterIndex")
+              engines[entry.key].localSessionGet("clusterIndex"),
+              engines[entry.key].localSessionGet("questionIndex"),
+              testType
             );
 
             if(curEngineKey == entry.key){
@@ -2736,7 +2762,7 @@ processUserTimesLog = function(expKey) {
               let answerFeedback = evaluateAnswer(userAnswer,isTimeout,isStudy,simCorrect,engineTdfFileName,currentAnswer,curClusterIndex, rawClusterIndex);
               var {historyUserAnswer,historyCorrectMsg} = answerFeedback;
               let justAdded = 0; //we didn't just add, we're processing old entries = 0
-              writeCurrentToScrollList(justAdded, engineTdfFileName,currentUnitNumber,historyUserAnswer,historyCorrectMsg);
+              writeCurrentToScrollList(justAdded, engineTdfFileName,currentUnitNumber,historyUserAnswer,historyCorrectMsg,currentAnswer,currentQuestion);
             }
 
             //Notify unit engine about card answer
@@ -2753,46 +2779,36 @@ processUserTimesLog = function(expKey) {
             //console.log("Ignoring user times log entry with action", action);
         }
 
-        if (recordTimestamp && entry.clientSideTimeStamp) {
+        if (recordTimestamp && entry.clientSideTimeStamp && (curEngineKey == entry.key)) {
             Session.set("lastTimestamp", entry.clientSideTimeStamp);
 
-            if (!!engine && engine.localSessionGet("currentUnitNumber") > startTimeMinUnit) {
+            if (engines[entry.key].localSessionGet("currentUnitNumber") > startTimeMinUnit) {
                 Session.set("currentUnitStartTime", Session.get("lastTimestamp"));
-                startTimeMinUnit = engine.localSessionGet("currentUnitNumber");
+                startTimeMinUnit = engines[entry.key].localSessionGet("currentUnitNumber");
             }
         }
-
-        // let propsToSetGlobal = [
-        //   "clusterIndex",
-        //   "questionIndex",
-        //   "currentUnitNumber",
-        //   "currentQuestion",
-        //   "currentQuestionPart2",
-        //   "currentAnswer",
-        //   "showOverlearningText",
-        //   "testType",
-        //   "currentTdfName",
-        // ]
-
-        // _.each(propsToSetGlobal, function(prop) {
-        //   if (!!engines[entry.key]) {
-        //     Session.set(prop, engines[entry.key].localSessionGet(prop));
-        //   }
-        // });
     });
 
     //After we process all the logs, restore the context for the current tdf only
     engine = null;
     Object.assign(engine,engines[curEngineKey]);
-    Session.set("clusterIndex",             engine.localSessionGet("clusterIndex"));
-    Session.set("questionIndex",            engine.localSessionGet("questionIndex"));
-    Session.set("currentUnitNumber",        engine.localSessionGet("currentUnitNumber"));
-    Session.set("currentQuestion",          engine.localSessionGet("currentQuestion"));
-    Session.set("currentQuestionPart2",     engine.localSessionGet("currentQuestionPart2"));
-    Session.set("currentAnswer",            engine.localSessionGet("currentAnswer"));
-    Session.set("showOverlearningText",     engine.localSessionGet("showOverlearningText"));
-    Session.set("testType",                 engine.localSessionGet("testType"));
-    Session.set("currentTdfName",           engine.localSessionGet("currentTdfName"));
+
+    let propsToSetGlobal = [
+      "clusterIndex",
+      "questionIndex",
+      "currentUnitNumber",
+      "currentQuestion",
+      "currentQuestionPart2",
+      "currentAnswer",
+      "showOverlearningText",
+      "testType",
+      "currentTdfName",
+      "clusterMapping"
+    ]
+
+    _.each(propsToSetGlobal, function(prop) {
+        Session.set(prop, engine.localSessionGet(prop));
+    });
 
     //If we make it here, then we know we won't need a resume until something
     //else happens

@@ -79,7 +79,6 @@ sessionCleanUp = function() {
     Session.set("ignoreOutOfGrammarResponses",false);
     Session.set("lastTimestamp", 0);
     Session.set("needResume", false);
-    Session.set("questionIndex", undefined);
     Session.set("recording",false);
     Session.set("sampleRate", undefined);
     Session.set("showOverlearningText", undefined);

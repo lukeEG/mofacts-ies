@@ -154,7 +154,63 @@ function defaultUnitEngine() {
 
         getRawClusterIndex(clusterIndex){
             return this.localSession['clusterMapping'][clusterIndex];
-        }
+        },
+
+        cardProbabilities: {},
+
+        getCardProbabilities: function(){ 
+            let clusterMapping = this.localSessionGet("clusterMapping");
+            if(!!clusterMapping){
+                let {cards,responses,probs} = this.cardProbabilities; 
+                let numQuestions = getStimClusterCount(this.contextData.currentStimName);
+                let unmappedCards = new Array(numQuestions).fill().map(() => ({}));
+                for (let i = 0; i < numQuestions; ++i) {
+                    let card = cards[i];
+                    let rawClusterIndex = this.getRawClusterIndex(i);
+                    Object.assign(unmappedCards[rawClusterIndex],card);
+                }
+
+                let unmappedProbs = new Array(numQuestions).fill().map(() => ({}));
+                for(let i=0;i<probs.length;i++){
+                    let clusterIndex = clusterMapping.indexOf(i);
+                    let unmappedProb = {
+                        cardIndex: clusterIndex
+                    };
+                    unmappedProbs[clusterIndex] = unmappedProb;
+                }
+                Object.assign(unmappedProbs,probs);
+
+                let unmappedCardProbs = {probs:unmappedProbs,responses:responses,cards:unmappedCards};
+                return unmappedCardProbs;
+            }
+            return this.cardProbabilities;
+        },
+
+        setCardProbabilities: function(newCardProbs){
+            let clusterMapping = this.localSessionGet("clusterMapping");
+            if(!!clusterMapping){
+                let {cards,responses,probs} = newCardProbs; 
+                let numQuestions = getStimClusterCount(this.contextData.currentStimName);
+                let mappedCards = new Array(numQuestions).fill().map(() => ({}));
+                for (let i = 0; i < numQuestions; ++i) {
+                    let card = cards[i];
+                    let mappedClusterIndex = clusterMapping[i]; 
+                    Object.assign(mappedCards[mappedClusterIndex],card);
+                }
+                let mappedProbs = [];
+                for(let i=0;i<probs.length;i++){
+                    let mappedProb = {
+                        cardIndex:this.getRawClusterIndex(i)
+                    };
+                    Object.assign(mappedProb,probs[i]);
+                    mappedProbs.push(mappedProb);
+                }
+
+                this.cardProbabilities = {probs:mappedProbs,responses:responses,cards:mappedCards};
+            }else{
+                this.cardProbabilities.cards = newCardProbs;
+            }
+        },
     };
 }
 
@@ -241,7 +297,6 @@ function modelUnitEngine(contextData) {
         },
 
         //Initialize card probabilities, with optional initial data
-        cardProbabilities = [],
 
         initCardProbs: function(overrideData) {
             var initVals = {
@@ -265,7 +320,7 @@ function modelUnitEngine(contextData) {
         initializeActRModel: function() {
             var i, j;
 
-            var numQuestions = getStimClusterCount();
+            var numQuestions = getStimClusterCount(this.contextData.currentStimName);
             var initCards = [];
             var initResponses = {};
             var initProbs = [];
@@ -329,7 +384,7 @@ function modelUnitEngine(contextData) {
             }
 
             // Figure out which cluster numbers that they want
-            var unitClusterList = _.chain(getTdfUnit(this.contextData.currentTdfName,this.contextData.currentUnitNumber))
+            var unitClusterList = _.chain(getTdfUnit(this.contextData.currentTdfName,this.localSessionGet("currentUnitNumber")))
                 .prop("learningsession").first()
                 .prop("clusterlist").trim().value();
 
@@ -404,26 +459,24 @@ function modelUnitEngine(contextData) {
             return p;
         },
 
-        //TODO: redo into IIFE
-
         // See if they specified a probability function
         probFunction: (function(){
-            _.chain(getTdfUnit(this.contextData.currentTdfName,this.contextData.currentUnitNumber))
+            let probFunction = _.chain(getTdfUnit(this.contextData.currentTdfName,this.contextData.currentUnitNumber))
             .prop("learningsession").first()
             .prop("calculateProbability").first().trim().value();
             if (!!probFunction) {
-                probFunction = new Function("p", "'use strict';\n" + probFunction);  // jshint ignore:line
+                return new Function("p", "'use strict';\n" + probFunction);  // jshint ignore:line
             }
             else {
-                probFunction = this.defaultProbFunction;
+                return this.defaultProbFunction;
             }
-        }(),
+        })(),
 
 
         // Given a single item from the cardProbabilities.probs array, calculate the
         // current probability. IMPORTANT: this function only returns ALL parameters
         // used which include probability. The caller is responsible for storing it.
-        function calculateSingleProb(prob) {
+        calculateSingleProb: function(prob) {
             var card = this.cardProbabilities.cards[prob.cardIndex];
             var stim = card.stims[prob.stimIndex];
 
@@ -478,12 +531,12 @@ function modelUnitEngine(contextData) {
 
             p.overallOutcomeHistory = getUserProgress().overallOutcomeHistory;
 
-            return probFunction(p);
+            return this.probFunction(p);
         },
 
         // Calculate current card probabilities for every card - see selectNextCard
         // the actual card/stim (cluster/version) selection
-        calculateCardProbabilities = function() {
+        calculateCardProbabilities: function() {
             // We use a "flat" probability structure - this is faster than a loop
             // over our nested data structure, but it also gives us more readable
             // code when we're setting something per stimulus
@@ -493,7 +546,7 @@ function modelUnitEngine(contextData) {
                 // card.canUse is true if and only if it is in the clusterlist
                 // for the current unit. You could just return here if these clusters
                 // should be ignored (or do nothing if they should be included below)
-                var parms = calculateSingleProb(probs[i]);
+                var parms = this.calculateSingleProb(probs[i]);
                 probs[i].probFunctionsParameters = parms;
                 probs[i].probability = parms.probability;
                 ptemp[i]=Math.round(100*parms.probability)/100;
@@ -505,7 +558,7 @@ function modelUnitEngine(contextData) {
 
         // Return index of PROB with minimum probability that was last seen at least
         // 2 trials ago. Default to index 0 in case no probs meet this criterion
-        function findMinProbCard(cards, probs) {
+        findMinProb: function(cards, probs) {
             var currentMin = 1.00001;
             var indexToReturn = 0;
 
@@ -526,7 +579,7 @@ function modelUnitEngine(contextData) {
 
         //Return index of PROB with max probability that is under ceiling. If no
         //card is found under ceiling then -1 is returned
-        function findMaxProbCard(cards, probs, ceiling) {
+        findMaxProb: function(cards, probs, ceiling) {
             var currentMax = 0;
             var indexToReturn = -1;
 
@@ -546,81 +599,65 @@ function modelUnitEngine(contextData) {
             return indexToReturn;
         },
 
-        function findMinProbDistCard(cards,probs){
-        var currentMin = 1.00001; //Magic number to indicate greater than highest possible distance to start
-        var indexToReturn = 0;
+        findMinProbDistCard: function(cards,probs){
+            var currentMin = 1.00001; //Magic number to indicate greater than highest possible distance to start
+            var indexToReturn = 0;
 
-        for (var i = probs.length - 1; i >= 0; --i) {
-            var prob = probs[i];
-            var card = cards[prob.cardIndex];
-            var parameters = card.stims[prob.stimIndex].parameter;
-            var optimalProb = parameters[1];
-            if(!optimalProb){
-                //console.log("NO OPTIMAL PROB SPECIFIED IN STIM, DEFAULTING TO 0.90");
-                optimalProb = 0.90;
-            }
-            //console.log("!!!parameters: " + JSON.stringify(parameters) + ", optimalProb: " + optimalProb);
+            for (var i = probs.length - 1; i >= 0; --i) {
+                var prob = probs[i];
+                var card = cards[prob.cardIndex];
+                var parameters = card.stims[prob.stimIndex].parameter;
+                var optimalProb = parameters[1];
+                if(!optimalProb){
+                    //console.log("NO OPTIMAL PROB SPECIFIED IN STIM, DEFAULTING TO 0.90");
+                    optimalProb = 0.90;
+                }
+                //console.log("!!!parameters: " + JSON.stringify(parameters) + ", optimalProb: " + optimalProb);
 
-            if (card.canUse && card.trialsSinceLastSeen > 1) {
-                var dist = Math.abs(prob.probability - optimalProb)
+                if (card.canUse && card.trialsSinceLastSeen > 1) {
+                    var dist = Math.abs(prob.probability - optimalProb)
 
-                //  console.log(dist)
-                // Note that we are checking stim probability
-                if (dist <= currentMin) {
-                    currentMin = dist;
-                    indexToReturn = i;
+                    //  console.log(dist)
+                    // Note that we are checking stim probability
+                    if (dist <= currentMin) {
+                        currentMin = dist;
+                        indexToReturn = i;
+                    }
                 }
             }
-        }
 
-        return indexToReturn;
+            return indexToReturn;
         },
 
-        function findMaxProbCardThresholdCeilingPerCard(cards,probs){
+        findMaxProbThresholdCeilingPerProb: function(cards,probs){
+            var currentMax = 0;
+            var indexToReturn = -1;
 
-        var currentMax = 0;
-        var indexToReturn = -1;
+            for (var i = probs.length - 1; i >= 0; --i) {
+                var prob = probs[i];
+                var card = cards[prob.cardIndex];
+                var parameters = card.stims[prob.stimIndex].parameter;
 
-        for (var i = probs.length - 1; i >= 0; --i) {
-            var prob = probs[i];
-            var card = cards[prob.cardIndex];
-            var parameters = card.stims[prob.stimIndex].parameter;
+                var thresholdCeiling = parameters[1];
+                if(!thresholdCeiling){
+                //  console.log("NO THRESHOLD CEILING SPECIFIED IN STIM, DEFAULTING TO 0.90");
+                    thresholdCeiling = 0.90;
+                }
+                //console.log("!!!parameters: " + JSON.stringify(parameters) + ", thresholdCeiling: " + thresholdCeiling + ", card: " + JSON.stringify(card));
 
-            var thresholdCeiling = parameters[1];
-            if(!thresholdCeiling){
-            //  console.log("NO THRESHOLD CEILING SPECIFIED IN STIM, DEFAULTING TO 0.90");
-                thresholdCeiling = 0.90;
-            }
-            //console.log("!!!parameters: " + JSON.stringify(parameters) + ", thresholdCeiling: " + thresholdCeiling + ", card: " + JSON.stringify(card));
-
-            if (card.canUse && card.trialsSinceLastSeen > 1) {
-                // Note that we are checking stim probability
-                if (prob.probability >= currentMax && prob.probability < thresholdCeiling) {
-                    currentMax = prob.probability;
-                    indexToReturn = i;
+                if (card.canUse && card.trialsSinceLastSeen > 1) {
+                    // Note that we are checking stim probability
+                    if (prob.probability >= currentMax && prob.probability < thresholdCeiling) {
+                        currentMax = prob.probability;
+                        indexToReturn = i;
+                    }
                 }
             }
-        }
 
-        return indexToReturn;
+            return indexToReturn;
         },
 
         contextData: contextData,
-
-        getCardProbs: function(){ //TODO: rename to calcAndGetCardProbs
-            return calculateCardProbabilities();
-        },
-
-        getCardProbabilities: function(){
-            return this.cardProbabilities;
-        },
-
-        setCardProbabilities: function(newCardProbs){
-            console.log("cardProbabilities before set:" + this.cardProbabilities);
-            this.cardProbabilities = {};
-            console.log("cardProbabilities after set:" + this.cardProbabilities);
-            Object.assign(this.cardProbabilities,newCardProbs);
-        },
 
         unitType: "model",
 
@@ -634,6 +671,7 @@ function modelUnitEngine(contextData) {
 
         initImpl: function() {
             this.initializeActRModel();
+            this.localSessionSet("questionIndex", 0);  //questionIndex doesn't have any meaning for a model
         },
 
         selectNextCard: function() {
@@ -652,24 +690,24 @@ function modelUnitEngine(contextData) {
 
             switch(this.unitMode){
                 case 'thresholdCeiling':
-                newProbIndex = findMaxProbCardThresholdCeilingPerCard(cards, probs);
+                newProbIndex = this.findMaxProbThresholdCeilingPerProb(cards, probs);
                 if (newProbIndex === -1) {
-                    newProbIndex = findMinProbCard(cards, probs);
+                    newProbIndex = this.findMinProb(cards, probs);
                 }
                 break;
                 case 'distance':
-                newProbIndex = findMinProbDistCard(cards,probs);
+                newProbIndex = this.findMinProbDistCard(cards,probs);
                 break;
                 case 'highest':
-                newProbIndex = findMaxProbCard(cards, probs, 1.00001); //Magic number to indicate there is no real ceiling (probs should max out at 1.0)
+                newProbIndex = this.findMaxProb(cards, probs, 1.00001); //Magic number to indicate there is no real ceiling (probs should max out at 1.0)
                 if (newProbIndex === -1) {
-                    newProbIndex = findMinProbCard(cards, probs);
+                    newProbIndex = this.findMinProb(cards, probs);
                 }
                 break;
                 default:
-                newProbIndex = findMaxProbCard(cards, probs, 0.90);
+                newProbIndex = this.findMaxProb(cards, probs, 0.90);
                 if (newProbIndex === -1) {
-                    newProbIndex = findMinProbCard(cards, probs);
+                    newProbIndex = this.findMinProb(cards, probs);
                 }
                 break;
             }
@@ -694,14 +732,11 @@ function modelUnitEngine(contextData) {
             var currentQuestion = this.localSessionGet("currentQuestion");
             //If we have a dual prompt question populate the spare data field
             if(currentQuestion.indexOf("|") != -1){
-
                 var prompts = currentQuestion.split("|");
                 this.localSessionSet("currentQuestion",prompts[0]);
                 this.localSessionSet("currentQuestionPart2",prompts[1]);
-            //    console.log("two part question detected: " + prompts[0] + ",,," + prompts[1]);
             }else{
-            //    console.log("Q: " +prompts[0]);
-            this.localSessionSet("currentQuestionPart2",undefined);
+                this.localSessionSet("currentQuestionPart2",undefined);
             }
 
             this.localSessionSet("currentAnswer", getStimAnswer(rawClusterIndex, whichStim));
@@ -716,7 +751,6 @@ function modelUnitEngine(contextData) {
             }else{
                 this.localSessionSet("testType", "d");
             }
-            this.localSessionSet("questionIndex", 1);  //questionIndex doesn't have any meaning for a model
             this.localSessionSet("showOverlearningText", showOverlearningText);
 
             // About to show a card - record any times necessary
@@ -828,7 +862,7 @@ function modelUnitEngine(contextData) {
                 card.trialsSinceLastSeen = 0;
                 card.hasBeenIntroduced = true;
                 stim.hasBeenIntroduced = true;
-                if (getTestType() === 's') {
+                if (_.trim(this.localSessionGet("testType")).toLowerCase() === 's') {
                     card.studyTrialCount += 1;
                 }
             }
@@ -864,9 +898,10 @@ function modelUnitEngine(contextData) {
         cardAnswered: function(wasCorrect, resumeData) {
             // Get info we need for updates and logic below
             var cards = this.cardProbabilities.cards;
-            let rawClusterIndex = this.getRawClusterIndex(this.localSessionGet("clusterIndex"));
+            let clusterIndex = this.localSessionGet("clusterIndex");
+            let rawClusterIndex = this.getRawClusterIndex(clusterIndex);
             var cluster = getStimCluster(rawClusterIndex,this.contextData.currentStimName);
-            var card = _.prop(cards, cluster.shufIndex); //TODO: get this from unmapping cluster index
+            var card = _.prop(cards, clusterIndex); //TODO: get this from unmapping cluster index
 
             // Before our study trial check, capture if this is NOT a resume
             // call (and we captured the time for the last question)
@@ -880,7 +915,7 @@ function modelUnitEngine(contextData) {
                     card.otherPracticeTimeSinceLast = 0;
                     _.each(cards, function(otherCard, index) {
                         if(otherCard.firstShownTimestamp > 0){
-                        if (index != cluster.shufIndex) {
+                        if (index != clusterIndex) {
                             otherCard.otherPracticeTimeSinceFirst += practice;
                             otherCard.otherPracticeTimeSinceLast += practice;
                             _.each(otherCard.stims, function(otherStim, index){
@@ -905,7 +940,7 @@ function modelUnitEngine(contextData) {
             // leave. Note that the calculate call is important because this is
             // the only place we call it after init *and* something might have
             // changed during question selection
-            if (getTestType() === 's') {
+            if (_.trim(this.localSessionGet("testType")).toLowerCase() === 's') {
                 calculateCardProbabilities();
                 return;
             }
@@ -990,44 +1025,43 @@ function modelUnitEngine(contextData) {
 // Return an instance of the schedule-based unit engine
 
 function scheduleUnitEngine(contextData) {
-    let schedule = {};
+    return { schedule = {},
 
-    //Return the schedule for the current unit of the current lesson -
-    //If it doesn't exist, then create and store it in User Progress
-    function getSchedule() {
-        var unit = getCurrentUnitNumber();
+        //Return the schedule for the current unit of the current lesson -
+        //If it doesn't exist, then create and store it in User Progress
+        getSchedule: function() {
+            var unit = this.localSessionGet("currentUnitNumber");
 
-        //Create if we don't have a correct schedule
-        if (schedule === null) {
-            // TODO: set current tdf filename
-            var file = getTdfFile(this.contextData.currentTdfName); 
-            var setSpec = file.tdfs.tutor.setspec[0];
-            var currUnit = file.tdfs.tutor.unit[unit];
+            //Create if we don't have a correct schedule
+            if (this.schedule === null) {
+                // TODO: set current tdf filename
+                var file = getTdfFile(this.contextData.currentTdfName); 
+                var setSpec = file.tdfs.tutor.setspec[0];
+                var currUnit = file.tdfs.tutor.unit[unit];
 
-            schedule = AssessmentSession.createSchedule(setSpec, unit, currUnit);
-            if (!schedule) {
-                //There was an error creating the schedule - there's really nothing
-                //left to do since the experiment is broken
-                recordUserTime("FAILURE to create schedule", {
+                this.schedule = AssessmentSession.createSchedule(setSpec, unit, currUnit);
+                if (!this.schedule) {
+                    //There was an error creating the schedule - there's really nothing
+                    //left to do since the experiment is broken
+                    recordUserTime("FAILURE to create schedule", {
+                        unitname: _.display(currUnit.unitname),
+                        unitindex: unit
+                    });
+                    alert("There is an issue with the TDF - experiment cannot continue");
+                    throw new Error("There is an issue with the TDF - experiment cannot continue");
+                }
+
+                recordUserTime("schedule", {
                     unitname: _.display(currUnit.unitname),
-                    unitindex: unit
+                    unitindex: unit,
+                    schedule: this.schedule
                 });
-                alert("There is an issue with the TDF - experiment cannot continue");
-                throw new Error("There is an issue with the TDF - experiment cannot continue");
             }
 
-            recordUserTime("schedule", {
-                unitname: _.display(currUnit.unitname),
-                unitindex: unit,
-                schedule: schedule
-            });
-        }
+            //Now they can have the schedule
+            return this.schedule;
+        },
 
-        //Now they can have the schedule
-        return schedule;
-    }
-
-    return {
         contextData:contextData,
         unitType: "schedule",
 
@@ -1037,7 +1071,7 @@ function scheduleUnitEngine(contextData) {
 
         selectNextCard: function() {
             var questionIndex = this.localSessionGet("questionIndex");
-            var questInfo = getSchedule().q[questionIndex];
+            var questInfo = this.getSchedule().q[questionIndex];
             var whichStim = questInfo.whichStim;
 
             //Set current Q/A info, type of test (drill, test, study), and then
@@ -1052,9 +1086,7 @@ function scheduleUnitEngine(contextData) {
               var prompts = currentQuestion.split("|");
               this.localSessionSet("currentQuestion",prompts[0]);
               this.localSessionSet("currentQuestionPart2",prompts[1]);
-              console.log("two part question detected: " + prompts[0] + ",,," + prompts[1]);
             }else{
-              console.log("one part question detected");
               this.localSessionSet("currentQuestionPart2",undefined);
             }
             this.localSessionSet("currentAnswer", getStimAnswer(rawClusterIndex, whichStim));
@@ -1074,7 +1106,7 @@ function scheduleUnitEngine(contextData) {
         findCurrentCardInfo: function() {
             //selectNextCard increments questionIndex after setting all card
             //info, so we need to use -1 for this info
-            return getSchedule().q[this.localSessionGet("questionIndex") - 1];
+            return this.getSchedule().q[this.localSessionGet("questionIndex") - 1];
         },
 
         cardSelected: function(selectVal, resumeData) {
@@ -1105,7 +1137,7 @@ function scheduleUnitEngine(contextData) {
             var unit = this.localSessionGet("currentUnitNumber");
             var schedule = null;
             if (unit < getTdfFile(this.localSessionGet("currentTdfFile")).tdfs.tutor.unit.length) {
-                schedule = getSchedule();
+                schedule = this.getSchedule();
             }
 
             if (schedule && questionIndex < schedule.q.length) {

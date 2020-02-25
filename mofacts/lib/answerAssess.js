@@ -23,8 +23,8 @@ function answerIsBranched(answer) {
     return _.trim(answer).indexOf(';') >= 0;
 }
 
-checkIfUserAnswerMatchesOtherAnswers = function(userAnswer,correctAnswer,rawClusterIndex){
-  otherQuestionAnswers = getAllCurrentStimAnswers().filter(x => x !== correctAnswer);
+checkIfUserAnswerMatchesOtherAnswers = function(userAnswer,correctAnswer,rawClusterIndex,currentStimName){
+  otherQuestionAnswers = getAllCurrentStimAnswers(false,rawClusterIndex,currentStimName).filter(x => x !== correctAnswer);
   for(var i=0;i<otherQuestionAnswers.length;i++){
     var stimStr = otherQuestionAnswers[i];
     //split on ; and take first value because the first value is the correct branch in an answer
@@ -41,7 +41,7 @@ checkIfUserAnswerMatchesOtherAnswers = function(userAnswer,correctAnswer,rawClus
   return false;
 }
 
-function simpleStringMatch(userAnswer, correctAnswer, lfparameter, fullAnswerStr, rawClusterIndex) {
+function simpleStringMatch(userAnswer, correctAnswer, lfparameter, fullAnswerStr, rawClusterIndex,currentStimName) {
     var s1 = _.trim(userAnswer).toLowerCase();
     var s2 = _.trim(correctAnswer).toLowerCase();
     var fullAnswerText = _.trim(fullAnswerStr).toLowerCase();
@@ -55,7 +55,7 @@ function simpleStringMatch(userAnswer, correctAnswer, lfparameter, fullAnswerStr
         if (!!lfparameter) {
             //Check to see if the user answer is an exact match for any other answers in the stim file,
             //If not we'll do an edit distance calculation to determine if they were close enough to the correct answer
-            if(checkIfUserAnswerMatchesOtherAnswers(s1,fullAnswerText,rawClusterIndex)){
+            if(checkIfUserAnswerMatchesOtherAnswers(s1,fullAnswerText,rawClusterIndex,currentStimName)){
               return 0;
             }else{
               var editDistScore = 1.0 - (
@@ -82,14 +82,14 @@ function simpleStringMatch(userAnswer, correctAnswer, lfparameter, fullAnswerStr
 // match was exact, we return 1. If we matched on edit distance, we return 2.
 // We also support a |-only regex(-ish) format (which is also honored by our
 // regex search)
-function stringMatch(stimStr, userAnswer, lfparameter, rawClusterIndex) {
+function stringMatch(stimStr, userAnswer, lfparameter, rawClusterIndex,currentStimName) {
     if (/^[\|A-Za-z0-9 \.\%]+$/i.test(stimStr)) {
         // They have the regex matching our special condition - check it manually
         var checks = _.trim(stimStr).split('|');
         for(var i = 0; i < checks.length; ++i) {
             if (checks[i].length < 1)
                 continue;  //No blank checks
-            var matched = simpleStringMatch(userAnswer, checks[i], lfparameter, stimStr, rawClusterIndex);
+            var matched = simpleStringMatch(userAnswer, checks[i], lfparameter, stimStr, rawClusterIndex,currentStimName);
             if (matched !== 0) {
                 return matched; //Match!
             }
@@ -97,7 +97,7 @@ function stringMatch(stimStr, userAnswer, lfparameter, rawClusterIndex) {
         return 0; //Nothing found
     }
     else {
-        return simpleStringMatch(userAnswer, stimStr, lfparameter, stimStr, rawClusterIndex);
+        return simpleStringMatch(userAnswer, stimStr, lfparameter, stimStr, rawClusterIndex,currentStimName);
     }
 }
 
@@ -108,7 +108,7 @@ function stringMatch(stimStr, userAnswer, lfparameter, rawClusterIndex) {
 // the current levenshtein distance.
 // ALSO notice that we use the same return values as stringMatch: 0 for no
 // match, 1 for exact match, 2 for edit distance match
-function regExMatch(regExStr, userAnswer, lfparameter,fullAnswer,rawClusterIndex) {
+function regExMatch(regExStr, userAnswer, lfparameter,fullAnswer,rawClusterIndex,currentStimName) {
     if (lfparameter && /^[\|A-Za-z0-9 ]+$/i.test(regExStr)) {
         // They have an edit distance parameter and the regex matching our
         // special condition - check it manually
@@ -116,7 +116,7 @@ function regExMatch(regExStr, userAnswer, lfparameter,fullAnswer,rawClusterIndex
         for(var i = 0; i < checks.length; ++i) {
             if (checks[i].length < 1)
                 continue;  //No blank checks
-            var matched = simpleStringMatch(userAnswer, checks[i], lfparameter, fullAnswer,rawClusterIndex);
+            var matched = simpleStringMatch(userAnswer, checks[i], lfparameter, fullAnswer,rawClusterIndex,currentStimName);
             if (matched !== 0) {
                 return matched; //Match!
             }
@@ -132,7 +132,7 @@ function regExMatch(regExStr, userAnswer, lfparameter,fullAnswer,rawClusterIndex
 //Return [isCorrect, matchText] where isCorrect is true if the user-supplied
 //answer matches the first branch and matchText is the text response from a
 //matching branch
-function matchBranching(answer, userAnswer, lfparameter, rawClusterIndex) {
+function matchBranching(answer, userAnswer, lfparameter, rawClusterIndex,currentStimName) {
     var isCorrect = false;
     var matchText = "";
     var userAnswerCheck = _.trim(userAnswer).toLowerCase();
@@ -144,7 +144,7 @@ function matchBranching(answer, userAnswer, lfparameter, rawClusterIndex) {
             continue;
 
         flds[0] = _.trim(flds[0]).toLowerCase();
-        var matched = regExMatch(flds[0], userAnswerCheck, lfparameter,answer, rawClusterIndex);
+        var matched = regExMatch(flds[0], userAnswerCheck, lfparameter,answer, rawClusterIndex,currentStimName);
         if (matched !== 0) {
             matchText = _.trim(flds[1]);
             if (matched === 2) {
@@ -187,7 +187,7 @@ Answers = {
     //Returns the close study question. For a branched response, we take the
     //correct text - but for a "normal" response, we construct the study by
     //"filling in the blanks"
-    clozeStudy: function(question, answer) {
+    clozeStudy: function(question, answer) { //TODO: will have to evaluate this while merging in syllable code
         var result = question; //Always succeed
 
         if (answerIsBranched(answer)) {
@@ -202,14 +202,14 @@ Answers = {
 
     //Return [isCorrect, matchText] if userInput correctly matches answer -
     //taking into account both branching answers and edit distance
-    answerIsCorrect: function(userInput, answer, setspec,clusterIndex, rawClusterIndex) {
+    answerIsCorrect: function(userInput, answer, setspec,clusterIndex, rawClusterIndex, currentStimName) {
         //Note that a missing or invalid lfparameter will result in a null value
         var lfparameter = _.chain(setspec).prop("lfparameter").first().floatval().value();
 
 
 
         if (answerIsBranched(answer)) {
-            return matchBranching(answer, userInput, lfparameter, rawClusterIndex);
+            return matchBranching(answer, userInput, lfparameter, rawClusterIndex,currentStimName);
         }
         else {
             var isCorrect, matchText;
@@ -220,7 +220,7 @@ Answers = {
                 dispAnswer = _.trim(dispAnswer.split("|")[0]);
             }
 
-            var match = stringMatch(answer, userInput, lfparameter,rawClusterIndex);
+            var match = stringMatch(answer, userInput, lfparameter,rawClusterIndex,currentStimName);
 
             if (match === 0) {
                 isCorrect = false;

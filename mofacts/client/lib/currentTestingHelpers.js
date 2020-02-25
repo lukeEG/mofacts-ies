@@ -20,24 +20,19 @@ getCurrentScoreValues = function (curUnit) {
     ];
 };
 
-//Returns the current cluster index with shuffles and swaps applied, NOT the original index in the stim file
-getCurrentClusterIndex = function () {
-    return Session.get("clusterIndex");
-};
-
 //Returns the original current cluster index, i.e. the index in the original stim file without shuffles or swaps
 getOriginalCurrentClusterIndex = function () {
   var clusterMapping = Session.get("clusterMapping");
   if(clusterMapping){
-    return clusterMapping[getCurrentClusterIndex()];
+    return clusterMapping[Session.get("clusterIndex")];
   }else{
     throw "no cluster mapping found";
   }
 }
 
 //Return the total number of stim clusters
-getStimClusterCount = function() {
-    return Stimuli.findOne({fileName: getCurrentStimName()})
+getStimClusterCount = function(stimFileName) {
+    return Stimuli.findOne({fileName: stimFileName})
         .stimuli.setspec.clusters[0].cluster.length;
 };
 
@@ -59,7 +54,7 @@ getStimCluster = function (index, stimFileName) {
 
 curStimIsSoundDisplayType = function(){
   var foundSoundDisplayType = false;
-  Stimuli.find({fileName: getCurrentStimName(),"stimuli.setspec.clusters.cluster.displayType":"Sound"}).forEach(function(entry){
+  Stimuli.find({fileName: Session.get("currentStimName"),"stimuli.setspec.clusters.cluster.displayType":"Sound"}).forEach(function(entry){
     foundSoundDisplayType = true;
   });
 
@@ -68,7 +63,7 @@ curStimIsSoundDisplayType = function(){
 
 getCurStimImageSrcs = function(){
   var imageSrcs = [];
-  var clusters = Stimuli.findOne({fileName: getCurrentStimName()}).stimuli.setspec.clusters;
+  var clusters = Stimuli.findOne({fileName: Session.get("currentStimName")}).stimuli.setspec.clusters;
   for(var index in clusters){
     var clusterCollection = clusters[index];
     for(var clusterIndex in clusterCollection){
@@ -85,7 +80,7 @@ getCurStimImageSrcs = function(){
 }
 
 getAllStimQuestions = function(){
-  var clusters = Stimuli.findOne({fileName: getCurrentStimName()}).stimuli.setspec.clusters[0].cluster
+  var clusters = Stimuli.findOne({fileName: Session.get("currentStimName")}).stimuli.setspec.clusters[0].cluster
   var allQuestions = [];
   var exclusionList = ["18-25","Male","Less than High School"];
 
@@ -101,9 +96,9 @@ getAllStimQuestions = function(){
   return allQuestions;
 }
 
-getAllCurrentStimAnswers = function(removeExcludedPhraseHints,rawClusterIndex) {
+getAllCurrentStimAnswers = function(removeExcludedPhraseHints,rawClusterIndex, currentStimName) {
 
-  var clusters = Stimuli.findOne({fileName: getCurrentStimName()}).stimuli.setspec.clusters[0].cluster
+  var clusters = Stimuli.findOne({fileName: currentStimName}).stimuli.setspec.clusters[0].cluster
   var allAnswers = new Set;
   var exclusionList = ["18-25","Male","Less than High School"];
 
@@ -241,20 +236,8 @@ getFeedbackForFalseResponse = function(whichAnswer,rawClusterIndex, stimFileName
   }
 };
 
-getCurrentStimName = function () {
-    return Session.get("currentStimName");
-};
-
-getCurrentUnitNumber = function () {
-    return Session.get("currentUnitNumber");
-};
-
-getCurrentTdfName = function () {
-    return Session.get("currentTdfName");
-};
-
 getCurrentTdfFile = function () {
-    return Tdfs.findOne({fileName: getCurrentTdfName()});
+    return Tdfs.findOne({fileName: Session.get("currentTdfName")});
 };
 
 getTdfFile = function(tdfFileName){
@@ -286,8 +269,9 @@ getCurrentTdfUnit = function (unitIdx) {
     var currUnit = null;
     if (typeof thisTdf.tdfs.tutor.unit !== "undefined") {
         //If they didn't override the unit idx, then use the current
-        if (!unitIdx && unitIdx !== 0)
-            unitIdx = getCurrentUnitNumber();
+        if (!unitIdx && unitIdx !== 0){
+          unitIdx = Session.get("currentUnitNumber");
+        }
         currUnit = thisTdf.tdfs.tutor.unit[unitIdx];
     }
 
@@ -308,7 +292,7 @@ getUnitsRemaining = function() {
             unitCount = thisTdf.tdfs.tutor.unit.length;
         }
         if (unitCount > 0) {
-            var unitIdx = getCurrentUnitNumber() || 0;
+            var unitIdx = Session.get("currentUnitNumber") || 0;
             unitsLeft = (unitCount - unitIdx) - 1;
             if (unitsLeft < 0) {
                 unitsLeft = 0;

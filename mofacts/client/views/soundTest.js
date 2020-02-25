@@ -43,7 +43,7 @@ preloadAudioFiles = function(){
 Template.soundTest.rendered = function() {
     console.log("card rendered");
     Session.set("currentStimName","Chinesestims.xml");
-    console.log("curStimName: " + getCurrentStimName());
+    console.log("curStimName: " + Session.get("currentStimName"));
     //preloadAudioFiles();
 };
 
