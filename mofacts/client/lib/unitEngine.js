@@ -158,57 +158,65 @@ function defaultUnitEngine() {
 
         cardProbabilities: {},
 
+        deepCopy: function(data){
+            return JSON.parse(JSON.stringify(data));
+        },
+
+        //NOTE: we are emitting cardProbabilities "unmapped" from our clusterMapping back to the original indices
         getCardProbabilities: function(){ 
             let clusterMapping = this.localSessionGet("clusterMapping");
             if(!!clusterMapping){
-                let {cards,responses,probs} = this.cardProbabilities; 
+                let {cards,responses,probs} = this.deepCopy(this.cardProbabilities); 
                 let numQuestions = getStimClusterCount(this.contextData.currentStimName);
                 let unmappedCards = new Array(numQuestions).fill().map(() => ({}));
                 for (let i = 0; i < numQuestions; ++i) {
                     let card = cards[i];
-                    let rawClusterIndex = this.getRawClusterIndex(i);
+                    let rawClusterIndex = clusterMapping[i];
                     Object.assign(unmappedCards[rawClusterIndex],card);
                 }
 
-                let unmappedProbs = new Array(numQuestions).fill().map(() => ({}));
-                for(let i=0;i<probs.length;i++){
-                    let clusterIndex = clusterMapping.indexOf(i);
-                    let unmappedProb = {
-                        cardIndex: clusterIndex
-                    };
-                    unmappedProbs[clusterIndex] = unmappedProb;
+                let unmappedProbArrays = new Array(numQuestions).fill().map(() => ([]));
+                for(let i = 0; i< numQuestions; i++){
+                    let allProbsForCard = this.deepCopy(probs.filter(prob => prob.cardIndex == i))
+                    let rawClusterIndex = clusterMapping[i];
+                    allProbsForCard.forEach(function(prob){ prob.cardIndex = rawClusterIndex });
+                    unmappedProbArrays[rawClusterIndex] = allProbsForCard;
                 }
-                Object.assign(unmappedProbs,probs);
+                let unmappedProbs = unmappedProbArrays.flat();
 
                 let unmappedCardProbs = {probs:unmappedProbs,responses:responses,cards:unmappedCards};
                 return unmappedCardProbs;
             }
-            return this.cardProbabilities;
+            //No cluster mapping means we set it directly and are just passing raw indices through a schedule unit
+            return this.deepCopy(this.cardProbabilities);
         },
 
+        //Note: newCardProbs is assumed to be "unmapped", i.e. the indices are not in clusterMapping order but "raw" order
         setCardProbabilities: function(newCardProbs){
             let clusterMapping = this.localSessionGet("clusterMapping");
             if(!!clusterMapping){
-                let {cards,responses,probs} = newCardProbs; 
+                let {cards,responses,probs} = this.deepCopy(newCardProbs); 
                 let numQuestions = getStimClusterCount(this.contextData.currentStimName);
                 let mappedCards = new Array(numQuestions).fill().map(() => ({}));
                 for (let i = 0; i < numQuestions; ++i) {
                     let card = cards[i];
-                    let mappedClusterIndex = clusterMapping[i]; 
+                    let mappedClusterIndex = clusterMapping.indexOf(i); 
                     Object.assign(mappedCards[mappedClusterIndex],card);
                 }
-                let mappedProbs = [];
-                for(let i=0;i<probs.length;i++){
-                    let mappedProb = {
-                        cardIndex:this.getRawClusterIndex(i)
-                    };
-                    Object.assign(mappedProb,probs[i]);
-                    mappedProbs.push(mappedProb);
+
+                let mappedProbArrays = new Array(numQuestions).fill().map(() => ([]));
+                for(let i=0;i<numQuestions;i++){
+                    let mappedProbsArray = this.deepCopy(probs.filter(prob => prob.cardIndex == i))
+                    let mappedIndex = clusterMapping.indexOf(i);
+                    mappedProbsArray.forEach(function(prob){ prob.cardIndex = mappedIndex });
+                    mappedProbArrays[mappedIndex] = mappedProbsArray;
                 }
+                let mappedProbs = mappedProbArrays.flat();
 
                 this.cardProbabilities = {probs:mappedProbs,responses:responses,cards:mappedCards};
             }else{
-                this.cardProbabilities.cards = newCardProbs;
+                //No cluster mapping means we set it directly and are just passing raw indices through a schedule unit
+                this.cardProbabilities = this.deepCopy(newCardProbs);
             }
         },
     };
@@ -405,7 +413,7 @@ function modelUnitEngine(contextData) {
             });
 
             //has to be done once ahead of time to give valid values for the beginning of the test.
-            calculateCardProbabilities();
+            this.calculateCardProbabilities();
         },
 
         // Helpers for time/display/calc below
@@ -941,7 +949,7 @@ function modelUnitEngine(contextData) {
             // the only place we call it after init *and* something might have
             // changed during question selection
             if (_.trim(this.localSessionGet("testType")).toLowerCase() === 's') {
-                calculateCardProbabilities();
+                this.calculateCardProbabilities();
                 return;
             }
 
@@ -988,7 +996,7 @@ function modelUnitEngine(contextData) {
             // All stats gathered - calculate probabilities
             //Need a delay so that the outcomehistory arrays can be properly updated
             //before we use them in calculateCardProbabilities
-            Meteor.setTimeout(calculateCardProbabilities,20);
+            Meteor.setTimeout(this.calculateCardProbabilities,20);
         },
 
         unitFinished: function() {
