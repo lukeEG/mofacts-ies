@@ -455,6 +455,22 @@ Template.card.rendered = function() {
     }
   }
   console.log('RENDERED!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
+
+  if(!externalEngineSessionData){
+    var userLog = UserTimesLog.findOne({ _id: Meteor.userId() });
+    externalEngineSessionData = {};
+    if(!!userLog){
+      var keys = Object.keys(userLog);
+      keys.forEach(function(key) {
+        // Skip ID object
+        if (key.includes("xml")) {
+          let engineName = replaceUnderscoreInTdfName(key);
+          externalEngineSessionData[engineName] = { currentUnitNumber: 0 };
+        }
+      });
+    }
+  }
+
     var audioInputEnabled = Session.get("audioEnabled");
     if(audioInputEnabled){
       if(!Session.get("audioInputSensitivity")){
@@ -726,8 +742,8 @@ initializeAudio = function(){
 }
 
 var preloadAudioFiles = function(){
-  var setSpec = getCurrentTdfFile().tdfs.tutor.setspec[0];
-  var soundExtension = setSpec.soundExtension || ".wav";
+  var setspec = getCurrentTdfFile().tdfs.tutor.setspec[0];
+  var soundExtension = setspec.soundExtension || ".wav";
   console.log("sound extension!!!: " + soundExtension);
   var allQuestions = getAllStimQuestions();
   for(var index in allQuestions){
@@ -798,7 +814,6 @@ cardStart = function(){
 
       console.log("cards template rendered => Performing resume");
       Session.set("showOverlearningText", false);
-      engine.localSessionSet("showOverlearningText",false);
 
       Session.set("needResume", false); //Turn this off to keep from re-resuming
       resumeFromUserTimesLog();
@@ -814,7 +829,7 @@ function newQuestionHandler() {
 
     var textFocus = false; //We'll set to true if needed
 
-    var unitNumber = Session.get("currentUnitNumber");
+    var unitNumber = Session.get("currentUnitNumber"); //TODO: refactor out or at least incorporate with engines
     var file = getCurrentTdfFile();
     var currUnit = file.tdfs.tutor.unit[unitNumber];
 
@@ -1301,7 +1316,7 @@ function evaluateAnswer(userAnswer,isTimeout,isStudy,simCorrect,tdfFileName,curr
 //answered the question. simCorrect will usually be undefined/null BUT if
 //it is true or false we know this is part of a simulation call
 function userAnswerFeedback(userAnswer, isTimeout, simCorrect) {
-    let isCorrect = null;
+    var isCorrect = null;
     let isStudy = getTestType() === "s";
     //Nothing to evaluate for a study - just pretend they answered correctly
     if (isStudy) {
@@ -1311,9 +1326,9 @@ function userAnswerFeedback(userAnswer, isTimeout, simCorrect) {
 
     //Helpers for correctness logic below
     let isDrill = (getTestType() === "d" || getTestType() === "m" || getTestType() === "n");
-    let msg = "";
-    let historyUserAnswer = "";
-    let historyCorrectMsg = "";   
+    var msg = "";
+    var historyUserAnswer = "";
+    var historyCorrectMsg = "";   
     let currentClusterIndex = Session.get("clusterIndex");
 
     let answerFeedback = evaluateAnswer(userAnswer,isTimeout,isStudy,simCorrect,tdfFileName,currentClusterIndex);
@@ -1371,14 +1386,14 @@ function prepareCard() {
 // len display timeout function)
 function unitIsFinished(reason) {
     clearCardTimeout();
-
+    
     var file = getCurrentTdfFile();
     var unit = Session.get("currentUnitNumber");
 
     engine.localSessionSet("questionIndex", 0);
     engine.localSessionSet("clusterIndex", undefined);
     var newUnit = unit + 1;
-    engine.localSessionSet("currentUnitNumber", newUnit);
+    externalEngineSessionData[file.fileName].currentUnitNumber = newUnit;
     Session.set("currentUnitNumber",newUnit);
     Session.set("currentUnitStartTime", Date.now());
 
@@ -1699,8 +1714,8 @@ processLINEAR16 = function(data){
 
   if(userAnswer || getButtonTrial()){
     var sampleRate = Session.get("sampleRate");
-    var setSpec = getCurrentTdfFile().tdfs.tutor.setspec[0];
-    var speechRecognitionLanguage = setSpec.speechRecognitionLanguage;
+    var setspec = getCurrentTdfFile().tdfs.tutor.setspec[0];
+    var speechRecognitionLanguage = setspec.speechRecognitionLanguage;
     if(!speechRecognitionLanguage){
       console.log("no speechRecognitionLanguage in set spec, defaulting to en-US");
       speechRecognitionLanguage = "en-US";
@@ -2100,6 +2115,12 @@ replaceUnderscoreInTdfName = function(tdfNameWithUnderscore) {
 // Return concatenated list of user times logs with current stimulus
 getUserTimesLogsAndEngines = function(userID) {
   var userLog = UserTimesLog.findOne({ _id: userID });
+  if(!userLog){
+    return {
+      logs: [],
+      engines: {}
+    }
+  }
   var keys = Object.keys(userLog);
   var enginesToGet = {};
   var userLogsWithCurrentStim = [];
@@ -2108,9 +2129,8 @@ getUserTimesLogsAndEngines = function(userID) {
     // Skip ID object
     if (key.includes("xml")) {
       let engineName = replaceUnderscoreInTdfName(key);
-      externalEngineSessionData[engineName] = { currentUnit: 0 };
       if (userLog[key][0].stimulusfile == Session.get("currentStimName")) {
-        userLogsWithCurrentStim.concat(userLog[key].map(function(entry) { //TODO: changed from push to concat, is that right?
+        userLogsWithCurrentStim.concat(userLog[key].map(function(entry) { //TODO1: changed from push to concat, is that right?
           entry.key = engineName;
           return entry;
         }));
@@ -2118,8 +2138,8 @@ getUserTimesLogsAndEngines = function(userID) {
         enginesToGet[engineName] = createEmptyUnit();
 
         //Initialize some variables for after the processUserTimesLogs loop
-        let tdfFile = getTdfFile(key);
-        let needFirstUnitInstructions = tdfFileWeSelected.tdfs.tutor.unit && tdfFile.tdfs.tutor.unit.length;
+        let tdfFile = getTdfFile(engineName);
+        let needFirstUnitInstructions = tdfFile.tdfs.tutor.unit && tdfFile.tdfs.tutor.unit.length;
         enginesToGet[engineName].localSessionSet("needFirstUnitInstructions",needFirstUnitInstructions);
         enginesToGet[engineName].localSessionSet("moduleCompleted",false);
       }
@@ -2131,7 +2151,7 @@ getUserTimesLogsAndEngines = function(userID) {
   });
 
   return {
-    logs: userLogsWithCurrentStim, //TODO: make sure this returns correctly
+    logs: userLogsWithCurrentStim, 
     engines: enginesToGet
   };
 }
@@ -2349,12 +2369,12 @@ function resumeFromUserTimesLog() {
         //No cluster mapping! Need to create it and store for resume
         //We process each pair of shuffle/swap together and keep processing
         //until we have nothing left
-        var setSpec = getCurrentTdfFile().tdfs.tutor.setspec[0];
+        var setspec = getCurrentTdfFile().tdfs.tutor.setspec[0];
 
         //Note our default of a single no-op to insure we at least build a
         //default cluster mapping
-        var shuffles = setSpec.shuffleclusters || [""];
-        var swaps = setSpec.swapclusters || [""];
+        var shuffles = setspec.shuffleclusters || [""];
+        var swaps = setspec.swapclusters || [""];
         clusterMapping = [];
 
         while(shuffles.length > 0 || swaps.length > 0) {
@@ -2424,10 +2444,6 @@ processUserTimesLog = function(expKey) {
         currentSchedule: {}
     });
 
-    //Reset our global engine state in case we switched tdfs on profile
-    engine = null;
-    engines = null;
-
     //Default to first unit
     Session.set("currentUnitStartTime", Date.now());
 
@@ -2435,8 +2451,10 @@ processUserTimesLog = function(expKey) {
     //it will miss instructions for the very first unit.
 
     //Reset current engine
-    var resetEngine = function(currUnit, currEngine, contextData) {
+    var resetEngine = function(currUnit, currEngineKey, contextData) {
         var tempEngine = {}; 
+        contextData.currentUnitNumber = currUnit;
+        console.log("resetting engine: " + currUnit + ", " + currEngineKey + ", " + JSON.stringify(contextData));
 
         if (unitHasOption(currUnit, "assessmentsession",contextData.currentTdfName)) {
             tempEngine = createScheduleUnit(contextData);
@@ -2451,16 +2469,51 @@ processUserTimesLog = function(expKey) {
             tempEngine.localSessionSet("sessionType","empty");
         }
 
-        tempEngine.localSessionSet("currentUnitNumber", currUnit);
+        if(!externalEngineSessionData[currEngineKey]){
+          externalEngineSessionData[currEngineKey] = {};
+        }
+        externalEngineSessionData[currEngineKey].currentUnitNumber = currUnit;
         console.log("cuu1: ", currUnit);
 
-        Object.assign(currEngine, tempEngine);
+        let newEngine = !engine;
 
-        if (!engine) {
-          engine = {};
+        let propsToTransfer = [
+          "clusterIndex",
+          "questionIndex",
+          "currentQuestion",
+          "currentQuestionPart2",
+          "currentAnswer",
+          "showOverlearningText",
+          "testType",
+          "currentTdfName",
+          "clusterMapping"
+        ]
+
+        let propValues = {};
+
+        //On first initialization pass in the global state we already have
+        if(newEngine){
+          console.log("new engine, session vars: " + JSON.stringify(Session.all()));
+          engine = engines[currEngineKey] = tempEngine;
+          engine.localSessionSet("clusterIndex",Session.get("clusterIndex"));
+          engine.localSessionSet("questionIndex",Session.get("questionIndex"));
+          engine.localSessionSet("currentQuestion",Session.get("currentQuestion"));
+          engine.localSessionSet("currentQuestionPart2",Session.get("currentQuestionPart2"));
+          engine.localSessionSet("currentAnswer",Session.get("currentAnswer"));
+          engine.localSessionSet("showOverlearningText",false);
+          engine.localSessionSet("testType",Session.get("testType"));
+          engine.localSessionSet("currentTdfName",Session.get("currentTdfName"));
+          engine.localSessionSet("clusterMapping",Session.get("clusterMapping"));
+        }else{
+          _.each(propsToTransfer,function(prop){
+            propValues[prop]=engines[currEngineKey].localSessionGet(prop);
+          })
+          engine = engines[currEngineKey] = tempEngine;
+          //Given engine = engines[currEngineKey, these also transfers session state to engine
+          _.each(propsToTransfer, function(prop) {
+            engines[currEngineKey].localSessionSet(prop, propValues[prop]); 
+          });
         }
-
-        Object.assign(engine, currEngine);
     };
 
     //The last unit we captured start time for - this way we always get the
@@ -2473,15 +2526,33 @@ processUserTimesLog = function(expKey) {
     engines = utLogEngines.engines;
 
     //Make sure to save the cluster mapping in case we just generated it and it doesn't yet exist in userTimesLog
-    let curEngineKey = replaceUnderscoreInTdfName(getCurrentTdfFile());
-    let lastEngineKey = curEngineKey
-    engines[curEngineKey].localSessionSet("clusterMapping",Session.get("clusterMapping"));
+    let curEngineKey = Session.get("currentTdfName");
+    let lastEngineKey = curEngineKey    
+
+    //Reset our global engine state in case we switched tdfs on profile
+    engine = null;
+    let currentUnitNumber = 0;
+    if(!!externalEngineSessionData[curEngineKey]){
+      currentUnitNumber = externalEngineSessionData[curEngineKey].currentUnitNumber;
+    }else if(!!engines[curEngineKey]){
+      if(currentUnitNumber != 0){
+        console.log("external currentUnitNumber: " + externalEngineSessionData[curEngineKey].currentUnitNumber);
+        console.log("engines context currentUnitNumber: " + engines[curEngineKey].contextData.currentUnitNumber);
+      }
+      currentUnitNumber = engines[curEngineKey].contextData.currentUnitNumber;
+    }
+    let contextData = {
+      currentStimName: getTdfFile(curEngineKey).tdfs.tutor.setspec[0].stimulusfile,
+      currentTdfName: curEngineKey
+    };
+    resetEngine(currentUnitNumber,curEngineKey,contextData);
 
     //At this point, our state is set as if they just started this learning
     //session for the first time. We need to loop thru the user times log
     //entries and update that state
 
-    _.each(utLogEngines.logs, function(entry, index, currentList) {
+    _.each(utLogEngines.logs, function(entry) {
+        console.log("Processing entry: " + JSON.stringify(entry));
         // IMPORTANT: this won't really work since we're in a tight loop. If we really
         // want to get this to work, we would need asynch loop processing (see
         // http://stackoverflow.com/questions/9772400/javascript-async-loop-processing
@@ -2568,12 +2639,11 @@ processUserTimesLog = function(expKey) {
                 let tdfFile = getTdfFile(tdfFileName);
 
                 let contextData = {
-                  currentStimName: tdfFile.tdfs.tutor.setSpec[0].stimulusfile,
-                  currentTdfName: tdfFileName,
-                  currentUnitNumber: instructUnit
+                  currentStimName: tdfFile.tdfs.tutor.setspec[0].stimulusfile,
+                  currentTdfName: tdfFileName
                 };
 
-                resetEngine(instructUnit, engines[entry.key],contextData);
+                resetEngine(instructUnit, entry.key,contextData);
 
                 engines[entry.key].localSessionSet("questionIndex", 0);
                 engines[entry.key].localSessionSet("clusterIndex", undefined);
@@ -2590,7 +2660,7 @@ processUserTimesLog = function(expKey) {
             //Logged completion of unit - if this is the final unit we also
             //know that the TDF is completed
             var finishedUnit = _.intval(entry.currentUnit, -1);
-            var checkUnit = _.intval(engines[entry.key].localSessionGet("currentUnitNumber"), -2);
+            var checkUnit = _.intval(engines[entry.key].contextData.currentUnitNumber, -2);
             console.log('cuu2: ', instructUnit);
             if (finishedUnit >= 0 && checkUnit === finishedUnit) {
                 //Correctly matches current unit - reset
@@ -2609,9 +2679,9 @@ processUserTimesLog = function(expKey) {
                     checkUnit += 1;
                     let contextData = {
                       currentTdfName: entry.key,
-                      currentUnitNumber: checkUnit
+                      currentStimName: getTdfFile(entry.key).tdfs.tutor.setspec[0].stimulusfile,
                     }
-                    resetEngine(checkUnit, engines[entry.key],contextData);
+                    resetEngine(checkUnit, entry.key,contextData);
                 }
 
                 engines[entry.key].localSessionSet("questionIndex", 0);
@@ -2660,7 +2730,7 @@ processUserTimesLog = function(expKey) {
             //Update what we know about the session
             //Note that the schedule unit engine will see and use this
             getUserProgress().currentSchedule = schedule;
-            engines[entry.key].localSessionSet("currentUnitNumber", unit);
+            //externalEngineSessionData[entry.key].currentUnitNumber = unit; //TODO: is this even necessary? We should only change units on unit end or tdf start?
             engines[entry.key].localSessionSet("questionIndex", 0);
 
             //Blank out things that should restart with a schedule
@@ -2695,7 +2765,7 @@ processUserTimesLog = function(expKey) {
           
           engines[entry.key].localSessionSet("clusterIndex",         cardIndex);
           engines[entry.key].localSessionSet("questionIndex",        entry.questionIndex);
-          engines[entry.key].localSessionSet("currentUnitNumber",    entry.currentUnit);
+          //externalEngineSessionData[entry.key].currentUnitNumber =   entry.currentUnit; //TODO: do we need this given unit index only changes on reset engine?
           engines[entry.key].localSessionSet("currentQuestion",      entry.selectedQuestion);
           engines[entry.key].localSessionSet("currentQuestionPart2", entry.selectedQuestionPart2);
           engines[entry.key].localSessionSet("currentAnswer",        entry.selectedAnswer);
@@ -2734,7 +2804,7 @@ processUserTimesLog = function(expKey) {
             engines[entry.key].localSessionSet("testType", testType);
             
             let engineTdfFileName = engines[entry.key].localSessionGet("currentTdfName");
-            let currentUnitNumber = engines[entry.key].localSessionGet("currentUnitNumber");
+            let currentUnitNumber = engines[entry.key].contextData.currentUnitNumber;
             let curUnit = getTdfUnit(engineTdfFileName,currentUnitNumber);
 
             let userAnswer = entry.answer;
@@ -2782,21 +2852,23 @@ processUserTimesLog = function(expKey) {
         if (recordTimestamp && entry.clientSideTimeStamp && (curEngineKey == entry.key)) {
             Session.set("lastTimestamp", entry.clientSideTimeStamp);
 
-            if (engines[entry.key].localSessionGet("currentUnitNumber") > startTimeMinUnit) {
+            if (engines[entry.key].contextData.currentUnitNumber > startTimeMinUnit) {
                 Session.set("currentUnitStartTime", Session.get("lastTimestamp"));
-                startTimeMinUnit = engines[entry.key].localSessionGet("currentUnitNumber");
+                startTimeMinUnit = engines[entry.key].contextData.currentUnitNumber;
             }
         }
     });
 
+    console.log("past processUserTimesLog each loop");
+
+    console.log("session vars: " + JSON.stringify(Session.all()));
+
     //After we process all the logs, restore the context for the current tdf only
-    engine = null;
-    Object.assign(engine,engines[curEngineKey]);
+    engine = engines[curEngineKey];
 
     let propsToSetGlobal = [
       "clusterIndex",
       "questionIndex",
-      "currentUnitNumber",
       "currentQuestion",
       "currentQuestionPart2",
       "currentAnswer",
@@ -2808,12 +2880,15 @@ processUserTimesLog = function(expKey) {
 
     _.each(propsToSetGlobal, function(prop) {
         Session.set(prop, engine.localSessionGet(prop));
+        console.log("setting " + prop + " : " + engine.localSessionGet(prop));
     });
+
 
     //If we make it here, then we know we won't need a resume until something
     //else happens
     Session.set("needResume", false);
     if (engine.localSessionGet("needFirstUnitInstructions")) {
+        engine.localSessionSet("needFirstUnitInstructions",false);
         //They haven't seen our first instruction yet
         console.log("RESUME FINISHED: displaying initial instructions");
         leavePage("/instructions");
@@ -2841,7 +2916,7 @@ processUserTimesLog = function(expKey) {
         // If we get this far and the unit engine thinks the unit is finished,
         // we might need to stick with the instructions *IF AND ONLY IF* the
         // lockout period hasn't finished (which prepareCard won't handle)
-        if (engine.unitFinished()) { //TODO: look at whether we need to swithc over these session variables and 
+        if (engine.unitFinished()) { //TODO: look at whether we need to switch over these session variables and 
             var lockoutMins = _.chain(getCurrentDeliveryParams()).prop("lockoutminutes").intval().value();
             if (lockoutMins > 0) {
                 var unitStartTimestamp = _.intval(Session.get("currentUnitStartTime"));

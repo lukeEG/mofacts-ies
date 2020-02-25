@@ -33,7 +33,7 @@ Template.profile.events({
     // Start a TDF
     'click .stimButton' : function (event) {
         event.preventDefault();
-        console.log(event);
+        console.log("click: " + event);
 
         var target = $(event.currentTarget);
         selectTdf(
@@ -337,7 +337,7 @@ function selectTdf(tdfkey, lessonName, stimulusfile, tdffilename, ignoreOutOfGra
 
    var continueToCard = true;
 
-   if(Session.get("audioEnabled"))
+   if(!!Session.get("audioEnabled") && Session.get("audioEnabled"))
    {
      //Check if the tdf or user has a speech api key defined, if not show the modal form
      //for them to input one.  If so, actually continue initializing web audio

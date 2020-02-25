@@ -125,7 +125,7 @@ function defaultUnitEngine() {
                     clusterIndex:         getRawClusterIndex(curClusterIndex),
                     shufIndex:            curClusterIndex,
                     questionIndex:        this.localSessionGet("questionIndex"),
-                    currentUnit:          this.localSessionGet("currentUnitNumber"),
+                    currentUnit:          this.contextData.currentUnitNumber,
                     selectedQuestion:     this.localSessionGet("currentQuestion"),
                     selectedQuestionPart2:this.localSessionGet("currentQuestionPart2"),
                     selectedAnswer:       this.localSessionGet("currentAnswer"),
@@ -274,7 +274,8 @@ function modelUnitEngine(contextData) {
     //Checked against practice seconds. Notice that we capture this on unit
     //creation, so if they leave in the middle of practice and come back to
     //the unit we'll start all over.
-    return { unitStartTimestamp = Date.now(),
+    return { 
+        unitStartTimestamp: Date.now(),
 
         getStimParameterArray: function(rawClusterIndex,whichParameter,stimFileName){
         return _.chain(getStimCluster(rawClusterIndex,stimFileName))
@@ -392,7 +393,7 @@ function modelUnitEngine(contextData) {
             }
 
             // Figure out which cluster numbers that they want
-            var unitClusterList = _.chain(getTdfUnit(this.contextData.currentTdfName,this.localSessionGet("currentUnitNumber")))
+            var unitClusterList = _.chain(getTdfUnit(this.contextData.currentTdfName,this.contextData.currentUnitNumber))
                 .prop("learningsession").first()
                 .prop("clusterlist").trim().value();
 
@@ -748,7 +749,7 @@ function modelUnitEngine(contextData) {
             }
 
             this.localSessionSet("currentAnswer", getStimAnswer(rawClusterIndex, whichStim));
-            let currentUnit = getTdfUnit(this.contextData.currentTdfName,this.localSessionGet("currentUnitNumber"));
+            let currentUnit = getTdfUnit(this.contextData.currentTdfName,this.contextData.currentUnitNumber);
             if(getCurrentDeliveryParams(currentUnit).studyFirst){
                 if(card.studyTrialCount == 0){
                 console.log("!!! STUDY FOR FIRST TRIAL");
@@ -775,7 +776,6 @@ function modelUnitEngine(contextData) {
             //Save for returning the info later (since we don't have a schedule)
             this.setCurrentCardInfo(cardIndex, whichStim);
 
-            let rawClusterIndex = this.getRawClusterIndex(cardIndex);
             var responseText = stripSpacesAndLowerCase(Answers.getDisplayAnswerText(getStimCluster(rawClusterIndex,this.contextData.currentStimName).response[whichStim]));
             if (responseText && responseText in this.cardProbabilities.responses) {
                 resp = this.cardProbabilities.responses[responseText];
@@ -909,7 +909,7 @@ function modelUnitEngine(contextData) {
             let clusterIndex = this.localSessionGet("clusterIndex");
             let rawClusterIndex = this.getRawClusterIndex(clusterIndex);
             var cluster = getStimCluster(rawClusterIndex,this.contextData.currentStimName);
-            var card = _.prop(cards, clusterIndex); //TODO: get this from unmapping cluster index
+            var card = _.prop(cards, clusterIndex);
 
             // Before our study trial check, capture if this is NOT a resume
             // call (and we captured the time for the last question)
@@ -1000,8 +1000,7 @@ function modelUnitEngine(contextData) {
         },
 
         unitFinished: function() {
-            let currentUnit = getTdfUnit(this.contextData.currentTdfName,this.localSessionGet("currentUnitNumber"));
-            //We use localSessionGet instead of this.contextData.currentUnitNumber because contextData doesn't change whereas the localsession entry will
+            let currentUnit = getTdfUnit(this.contextData.currentTdfName,this.contextData.currentUnitNumber);
             var session = _.chain(currentUnit).prop("learningsession").first().value();
             var minSecs = _.chain(session).prop("displayminseconds").first().intval(0).value();
             var maxSecs = _.chain(session).prop("displaymaxseconds").first().intval(0).value();
@@ -1033,16 +1032,16 @@ function modelUnitEngine(contextData) {
 // Return an instance of the schedule-based unit engine
 
 function scheduleUnitEngine(contextData) {
-    return { schedule = {},
+    return { 
+        schedule: {},
 
         //Return the schedule for the current unit of the current lesson -
         //If it doesn't exist, then create and store it in User Progress
         getSchedule: function() {
-            var unit = this.localSessionGet("currentUnitNumber");
+            var unit = this.contextData.currentUnitNumber;
 
             //Create if we don't have a correct schedule
             if (this.schedule === null) {
-                // TODO: set current tdf filename
                 var file = getTdfFile(this.contextData.currentTdfName); 
                 var setSpec = file.tdfs.tutor.setspec[0];
                 var currUnit = file.tdfs.tutor.unit[unit];
@@ -1142,9 +1141,9 @@ function scheduleUnitEngine(contextData) {
 
         unitFinished: function() {
             var questionIndex = this.localSessionGet("questionIndex");
-            var unit = this.localSessionGet("currentUnitNumber");
+            var unit = this.contextData.currentUnitNumber;
             var schedule = null;
-            if (unit < getTdfFile(this.localSessionGet("currentTdfFile")).tdfs.tutor.unit.length) {
+            if (unit < getTdfFile(this.localSessionGet("currentTdfName"))) {
                 schedule = this.getSchedule();
             }
 

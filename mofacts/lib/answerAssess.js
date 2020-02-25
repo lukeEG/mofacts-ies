@@ -187,7 +187,7 @@ Answers = {
     //Returns the close study question. For a branched response, we take the
     //correct text - but for a "normal" response, we construct the study by
     //"filling in the blanks"
-    clozeStudy: function(question, answer) { //TODO: will have to evaluate this while merging in syllable code
+    clozeStudy: function(question, answer) { //TODO1: will have to evaluate this while merging in syllable code
         var result = question; //Always succeed
 
         if (answerIsBranched(answer)) {
